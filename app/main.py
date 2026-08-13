@@ -18,11 +18,9 @@ while True:
         "content": user_input
     })
 
+    print("\nAPERTURE > ", end="", flush=True)
+
     answer = chat(messages)
 
-    messages.append({
-        "role": "assistant",
-        "content": answer
-    })
-
-    print(f"\nAPERTURE > {answer}\n")
+    print(answer)
+    print()
