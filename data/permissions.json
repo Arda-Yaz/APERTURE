@@ -1,0 +1,8 @@
+{
+  "list_directory:Downloads": "allow",
+  "read_file:Downloads/test.txt": "allow",
+  "read_file:downloads/test.txt": "allow",
+  "read_file:test.txt": "allow",
+  "list_directory:downloads": "allow",
+  "read_file:downloads/test": "allow"
+}
