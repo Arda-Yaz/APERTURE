@@ -61,23 +61,27 @@ class MemoryStore:
 
     def _initialize_database(self) -> None:
         with self._connect() as connection:
+
+            # 1. Fresh databases use the new schema.
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY,
                     category TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    normalized_content TEXT NOT NULL UNIQUE,
+                    normalized_content TEXT NOT NULL,
                     importance INTEGER NOT NULL,
                     source TEXT NOT NULL,
+                    subject TEXT NOT NULL DEFAULT 'user',
                     active INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(subject, normalized_content)
                 )
                 """
             )
 
-            # Migration: add subject column to existing databases
+            # 2. Older databases may not have subject yet.
             columns = {
                 row["name"]
                 for row in connection.execute(
@@ -93,6 +97,85 @@ class MemoryStore:
                     """
                 )
 
+            # 3. Detect old global UNIQUE(normalized_content).
+            unique_indexes = connection.execute(
+                "PRAGMA index_list(memories)"
+            ).fetchall()
+
+            has_global_content_unique = False
+
+            for index in unique_indexes:
+                if not index["unique"]:
+                    continue
+
+                index_name = index["name"]
+
+                indexed_columns = [
+                    row["name"]
+                    for row in connection.execute(
+                        f'PRAGMA index_info("{index_name}")'
+                    ).fetchall()
+                ]
+
+                if indexed_columns == ["normalized_content"]:
+                    has_global_content_unique = True
+                    break
+
+            # 4. Rebuild old table if necessary.
+            if has_global_content_unique:
+                connection.execute(
+                    """
+                    CREATE TABLE memories_new (
+                        id TEXT PRIMARY KEY,
+                        category TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        normalized_content TEXT NOT NULL,
+                        importance INTEGER NOT NULL,
+                        source TEXT NOT NULL,
+                        subject TEXT NOT NULL DEFAULT 'user',
+                        active INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        UNIQUE(subject, normalized_content)
+                    )
+                    """
+                )
+
+                connection.execute(
+                    """
+                    INSERT INTO memories_new (
+                        id,
+                        category,
+                        content,
+                        normalized_content,
+                        importance,
+                        source,
+                        subject,
+                        active,
+                        created_at,
+                        updated_at
+                    )
+                    SELECT
+                        id,
+                        category,
+                        content,
+                        normalized_content,
+                        importance,
+                        source,
+                        subject,
+                        active,
+                        created_at,
+                        updated_at
+                    FROM memories
+                    """
+                )
+
+                connection.execute("DROP TABLE memories")
+                connection.execute(
+                    "ALTER TABLE memories_new RENAME TO memories"
+                )
+
+            # 5. Normal indexes.
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_memories_active
@@ -113,7 +196,6 @@ class MemoryStore:
                 ON memories(subject)
                 """
             )
-
     def remember(
         self,
         content: str,
