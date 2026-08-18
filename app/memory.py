@@ -238,9 +238,13 @@ class MemoryStore:
                 """
                 SELECT *
                 FROM memories
-                WHERE normalized_content = ?
+                WHERE subject = ?
+                AND normalized_content = ?
                 """,
-                (normalized,),
+                (
+                    subject,
+                    normalized,
+                ),
             ).fetchone()
 
             if existing:

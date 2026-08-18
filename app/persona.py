@@ -1,20 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-import random
-
-
-def _clamp(value: float) -> float:
-    return max(0.0, min(1.0, value))
-
-
-def _level(value: float) -> str:
-    if value < 0.30:
-        return "low"
-    if value < 0.70:
-        return "moderate"
-    return "high"
-
 
 def build_persona_context(
     user_message: str = "",
@@ -41,3 +26,9 @@ experiences, decisions, and interactions over time.
 
 </PERSONA_CONTEXT>
 """.strip()
+
+
+
+
+
+
