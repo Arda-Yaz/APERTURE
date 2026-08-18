@@ -1,4 +1,5 @@
 from ollama import chat as ollama_chat
+from persona import build_persona_context
 
 from tools import (
     list_directory,
@@ -53,10 +54,23 @@ def get_current_goal(messages):
 
     return ""
 
-def inject_memory(messages):
+def inject_runtime_context(
+    messages,
+    user_message: str,
+):
     runtime_messages = list(messages)
 
+    persona_context = build_persona_context(
+        user_message=user_message,
+    )
+
     memory_context = build_memory_context()
+
+    runtime_context = (
+        persona_context
+        + "\n\n"
+        + memory_context
+    )
 
     if (
         runtime_messages
@@ -68,7 +82,7 @@ def inject_memory(messages):
         system_message["content"] = (
             system_message.get("content", "")
             + "\n\n"
-            + memory_context
+            + runtime_context
         )
 
         runtime_messages[0] = system_message
@@ -78,7 +92,7 @@ def inject_memory(messages):
             0,
             {
                 "role": "system",
-                "content": memory_context,
+                "content": runtime_context,
             },
         )
 
@@ -89,7 +103,10 @@ def chat(messages):
 
     # Agent'ın iç çalışma geçmişi.
     # Tool sonuçları ve controller mesajları kalıcı sohbeti kirletmez.
-    working_messages = inject_memory(messages)
+    working_messages = inject_runtime_context(
+    messages,
+    user_message=goal,
+)
 
     observations = []
     used_tool = False
