@@ -8,7 +8,7 @@ import unicodedata
 import uuid
 
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA_DIR / "aperture_memory.db"
 
 VALID_CATEGORIES = {

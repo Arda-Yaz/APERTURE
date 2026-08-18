@@ -9,8 +9,9 @@ def check_permission(tool_name: str, target: str = "") -> bool:
 
     # Tamamen güvenli/read-only işlemler
     READ_TOOLS = {
-        "list_directory",
-        "read_file",
+    "list_directory",
+    "read_file",
+    "search_memory",
     }
 
     # Dış dünyada etkisi olan işlemler
@@ -26,6 +27,8 @@ def check_permission(tool_name: str, target: str = "") -> bool:
     "read_file",
     "open_app",
     "run_terminal",
+    "save_memory",
+    "search_memory",
 }
 
     if MODE == "AUTONOMOUS":

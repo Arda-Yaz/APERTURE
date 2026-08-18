@@ -4,12 +4,6 @@ from ollama import chat as ollama_chat
 MODEL = "qwen3:8b"
 
 
-import json
-from ollama import chat as ollama_chat
-
-MODEL = "qwen3:8b"
-
-
 def is_task_complete(goal: str, answer: str, observations: str = "") -> bool:
     response = ollama_chat(
         model=MODEL,

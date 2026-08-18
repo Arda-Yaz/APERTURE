@@ -11,6 +11,12 @@ from tools import (
 from permissions import check_permission
 from task_controller import is_task_complete
 
+from memory import (
+    save_memory,
+    search_memory,
+    forget_memory,
+    build_memory_context,
+)
 
 MODEL = "qwen3:8b"
 MAX_STEPS = 8
@@ -22,6 +28,9 @@ TOOLS = [
     write_file,
     open_app,
     run_terminal,
+    save_memory,
+    search_memory,
+    forget_memory,
 ]
 
 
@@ -31,6 +40,9 @@ TOOL_MAP = {
     "write_file": write_file,
     "open_app": open_app,
     "run_terminal": run_terminal,
+    "save_memory": save_memory,
+    "search_memory": search_memory,
+    "forget_memory": forget_memory,
 }
 
 
@@ -41,13 +53,43 @@ def get_current_goal(messages):
 
     return ""
 
+def inject_memory(messages):
+    runtime_messages = list(messages)
+
+    memory_context = build_memory_context()
+
+    if (
+        runtime_messages
+        and isinstance(runtime_messages[0], dict)
+        and runtime_messages[0].get("role") == "system"
+    ):
+        system_message = dict(runtime_messages[0])
+
+        system_message["content"] = (
+            system_message.get("content", "")
+            + "\n\n"
+            + memory_context
+        )
+
+        runtime_messages[0] = system_message
+
+    else:
+        runtime_messages.insert(
+            0,
+            {
+                "role": "system",
+                "content": memory_context,
+            },
+        )
+
+    return runtime_messages
 
 def chat(messages):
     goal = get_current_goal(messages)
 
     # Agent'ın iç çalışma geçmişi.
     # Tool sonuçları ve controller mesajları kalıcı sohbeti kirletmez.
-    working_messages = list(messages)
+    working_messages = inject_memory(messages)
 
     observations = []
     used_tool = False
@@ -180,3 +222,14 @@ Rules:
             })
 
     return "Task stopped because maximum agent steps were reached."
+
+
+
+
+
+
+
+
+
+
+
