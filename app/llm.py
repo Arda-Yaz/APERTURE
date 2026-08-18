@@ -14,6 +14,7 @@ from task_controller import is_task_complete
 
 from memory import (
     save_memory,
+    save_self_memory,
     search_memory,
     forget_memory,
     build_memory_context,
@@ -30,6 +31,7 @@ TOOLS = [
     open_app,
     run_terminal,
     save_memory,
+    save_self_memory,
     search_memory,
     forget_memory,
 ]
@@ -44,6 +46,14 @@ TOOL_MAP = {
     "save_memory": save_memory,
     "search_memory": search_memory,
     "forget_memory": forget_memory,
+    "save_self_memory": save_self_memory,
+}
+
+NON_ACTION_TOOLS = {
+    "save_memory",
+    "save_self_memory",
+    "search_memory",
+    "forget_memory",
 }
 
 
@@ -109,7 +119,7 @@ def chat(messages):
 )
 
     observations = []
-    used_tool = False
+    used_action_tool = False
 
     for step in range(MAX_STEPS):
 
@@ -130,7 +140,7 @@ def chat(messages):
             answer = response.message.content or ""
 
             # Normal sohbet
-            if not used_tool:
+            if not used_action_tool:
                 messages.append({
                     "role": "assistant",
                     "content": answer,
@@ -186,12 +196,13 @@ Rules:
         # --------------------------------
         # MODEL TOOL ÇAĞIRDI
         # --------------------------------
-        used_tool = True
-
         for call in response.message.tool_calls:
 
             tool_name = call.function.name
             arguments = call.function.arguments
+
+            if tool_name not in NON_ACTION_TOOLS:
+                used_action_tool = True
 
             if tool_name not in TOOL_MAP:
                 result = f"TOOL_ERROR: Unknown tool: {tool_name}"

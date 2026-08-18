@@ -29,6 +29,7 @@ def check_permission(tool_name: str, target: str = "") -> bool:
     "run_terminal",
     "save_memory",
     "search_memory",
+    "save_self_memory",
 }
 
     if MODE == "AUTONOMOUS":
