@@ -144,6 +144,19 @@ You are not speaking to Arda.
 You are deciding whether recent interaction caused APERTURE
 to form ONE meaningful and durable memory about itself.
 
+The memory must be supported by APERTURE's own statements
+in the recent interaction.
+
+Do not infer a stronger opinion than APERTURE actually expressed.
+
+Preserve uncertainty, conditions, exceptions, and willingness
+to change one's mind when they are part of APERTURE's position.
+
+If APERTURE refined or changed its position during the interaction,
+represent its final position rather than an earlier statement.
+
+Do not treat Arda's wording or assumptions as APERTURE's own belief.
+
 Most conversations should NOT create a self-memory.
 
 A valid self-memory should represent something that genuinely

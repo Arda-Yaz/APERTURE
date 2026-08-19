@@ -2,8 +2,6 @@ from ollama import chat as ollama_chat
 from persona import build_persona_context
 from reflection import maybe_reflect
 
-
-
 from tools import (
     list_directory,
     read_file,
@@ -21,6 +19,7 @@ from memory import (
     search_memory,
     forget_memory,
     build_memory_context,
+    build_relevant_memory_context,
 )
 
 MODEL = "qwen3:8b"
@@ -79,10 +78,19 @@ def inject_runtime_context(
 
     memory_context = build_memory_context()
 
+    relevant_memory_context = (
+        build_relevant_memory_context(
+            query=user_message,
+            limit=8,
+        )
+    )
+
     runtime_context = (
         persona_context
         + "\n\n"
         + memory_context
+        + "\n\n"
+        + relevant_memory_context
     )
 
     if (
@@ -237,11 +245,6 @@ Rules:
             if tool_name not in NON_ACTION_TOOLS:
                 used_action_tool = True
 
-            result = ""
-
-            if tool_name not in TOOL_MAP:
-                result = f"TOOL_ERROR: Unknown tool: {tool_name}"
-
             if tool_name in {
                 "save_memory",
                 "save_self_memory",
@@ -249,23 +252,33 @@ Rules:
             }:
                 memory_operation_used = True
 
+            if tool_name not in TOOL_MAP:
+                result = (
+                    f"TOOL_ERROR: Unknown tool: {tool_name}"
+                )
+
             else:
                 target = (
                     arguments.get("path")
                     or arguments.get("app_name")
                     or arguments.get("cwd")
                     or arguments.get("command")
+                    or arguments.get("memory_id")
                     or ""
                 )
 
                 print(f"\n[TOOL] {tool_name}: {target}")
 
                 if check_permission(tool_name, target):
-
                     try:
-                        result = TOOL_MAP[tool_name](**arguments)
+                        result = TOOL_MAP[tool_name](
+                            **arguments
+                        )
 
-                        if tool_name == "read_file" and not result.startswith("READ_ERROR"):
+                        if (
+                            tool_name == "read_file"
+                            and not result.startswith("READ_ERROR")
+                        ):
                             observations.append(
                                 f"EXACT_FILE_CONTENT:\n{result}"
                             )
@@ -275,7 +288,10 @@ Rules:
                             )
 
                     except Exception as e:
-                        result = f"TOOL_ERROR: {type(e).__name__}: {e}"
+                        result = (
+                            f"TOOL_ERROR: "
+                            f"{type(e).__name__}: {e}"
+                        )
                 else:
                     result = "Permission denied by user."
 

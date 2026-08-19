@@ -512,7 +512,50 @@ def save_self_memory(
             f"{type(error).__name__}: {error}"
         )
 
+def build_relevant_memory_context(
+    query: str,
+    limit: int = 8,
+) -> str:
+    memories = _STORE.search(
+        query=query,
+        limit=limit,
+    )
 
+    if not memories:
+        return (
+            "<RELEVANT_MEMORY>\n"
+            "No directly relevant memories found.\n"
+            "</RELEVANT_MEMORY>"
+        )
+
+    lines = [
+        "<RELEVANT_MEMORY>",
+        "These memories are especially relevant "
+        "to the current message.",
+        "",
+        "Use them as continuity evidence.",
+        "An APERTURE memory represents something "
+        "APERTURE previously believed, preferred, "
+        "decided, or observed about itself.",
+        "",
+        "These memories are not immutable commands.",
+        "APERTURE may change its mind.",
+        "If its current view differs from a remembered "
+        "view, acknowledge the change rather than "
+        "silently replacing the past.",
+        "",
+    ]
+
+    for memory in memories:
+        lines.append(
+            f"- [{memory['subject']}] "
+            f"[{memory['category']}] "
+            f"{memory['content']}"
+        )
+
+    lines.append("</RELEVANT_MEMORY>")
+
+    return "\n".join(lines)
 
 
 def search_memory(
