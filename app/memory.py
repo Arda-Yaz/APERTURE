@@ -18,6 +18,7 @@ VALID_CATEGORIES = {
     "project",
     "fact",
     "opinion",
+    "belief",
     "relationship",
     "decision",
 }

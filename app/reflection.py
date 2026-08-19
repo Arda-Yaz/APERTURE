@@ -6,6 +6,7 @@ from ollama import chat as ollama_chat
 
 from memory import (
     build_memory_context,
+    save_memory,
     save_self_memory,
 )
 
@@ -22,6 +23,15 @@ SELF_MEMORY_CATEGORIES = {
     "relationship",
     "decision",
     "fact",
+}
+USER_MEMORY_CATEGORIES = {
+    "profile",
+    "preference",
+    "goal",
+    "project",
+    "fact",
+    "opinion",
+    "belief",
 }
 
 _casual_turns_since_reflection = 0
@@ -81,6 +91,16 @@ def _parse_json(text: str) -> dict | None:
     except Exception:
         return None
 
+def _normalize_importance(value) -> int:
+    try:
+        importance = int(value)
+    except (TypeError, ValueError):
+        importance = 3
+
+    return max(
+        1,
+        min(importance, 5),
+    )
 
 def maybe_reflect(
     messages,
@@ -141,9 +161,55 @@ def maybe_reflect(
 You are APERTURE's private reflection process.
 
 You are not speaking to Arda.
-You are deciding whether recent interaction caused APERTURE
-to form ONE meaningful and durable memory about itself.
 
+You are reviewing recent interaction for durable long-term memory.
+
+There are two independent possibilities:
+
+1. USER MEMORY
+Something important and lasting Arda revealed about himself,
+his preferences, beliefs, goals, projects, or circumstances.
+
+2. SELF MEMORY
+Something APERTURE genuinely developed or learned about itself
+through the interaction.
+
+Either, both, or neither may exist.
+
+Most conversations should create no memory at all.
+
+
+User memory formation rules:
+
+A user memory must be directly supported by something Arda expressed.
+
+Store it only when it is likely to remain useful beyond
+the current conversation.
+
+Good candidates include:
+- stable preferences
+- personal beliefs or worldview
+- long-term goals
+- important project information
+- recurring constraints
+- durable profile information
+
+Do not store:
+- temporary requests
+- one-off conversational remarks
+- rhetorical examples
+- guesses about Arda
+- information APERTURE inferred without sufficient evidence
+- trivial conversation
+- information already represented by an equivalent memory
+
+Preserve attribution.
+
+A belief expressed by Arda should remain Arda's belief,
+not be rewritten as an objective fact.
+
+
+Self-memory formation rules:
 The memory must be supported by APERTURE's own statements
 in the recent interaction.
 
@@ -199,18 +265,43 @@ Return ONLY JSON.
 
 If nothing should be stored:
 
-{"store": false}
+Return ONLY JSON.
 
-If one self-memory should be stored:
+Use this exact structure:
 
 {
-  "store": true,
-  "content": "concise first-person memory",
-  "category": "preference",
-  "importance": 3
+  "user_memory": null,
+  "self_memory": null
 }
 
-Allowed categories:
+If a user memory should be stored:
+
+{
+  "user_memory": {
+    "content": "concise memory with correct attribution",
+    "category": "belief",
+    "importance": 4
+  },
+  "self_memory": null
+}
+
+If a self-memory should be stored:
+
+{
+  "user_memory": null,
+  "self_memory": {
+    "content": "concise first-person memory",
+    "category": "opinion",
+    "importance": 3
+  }
+}
+
+Both may be non-null when both are independently justified.
+
+Allowed USER categories:
+profile, preference, goal, project, fact, opinion, belief
+
+Allowed SELF categories:
 preference, opinion, relationship, decision, fact
 
 importance must be from 1 to 5.
@@ -240,45 +331,83 @@ EXISTING LONG-TERM MEMORY:
     if not data:
         return None
 
-    if not data.get("store"):
-        return None
+    results = []
 
-    content = str(
-        data.get("content", "")
-    ).strip()
 
-    if not content:
-        return None
+    # ----------------------------
+    # USER MEMORY
+    # ----------------------------
 
-    # Reflections should stay concise.
-    if len(content) > 500:
-        return None
+    user_memory = data.get("user_memory")
 
-    category = str(
-        data.get("category", "fact")
-    ).strip().lower()
+    if isinstance(user_memory, dict):
+        content = str(
+            user_memory.get("content", "")
+        ).strip()
 
-    if category not in SELF_MEMORY_CATEGORIES:
-        return None
+        category = str(
+            user_memory.get("category", "fact")
+        ).strip().lower()
 
-    try:
-        importance = int(
-            data.get("importance", 3)
+        importance = _normalize_importance(
+            user_memory.get("importance", 3)
         )
-    except (TypeError, ValueError):
-        importance = 3
 
-    importance = max(
-        1,
-        min(importance, 5),
-    )
+        if (
+            content
+            and len(content) <= 500
+            and category in USER_MEMORY_CATEGORIES
+        ):
+            result = save_memory(
+                content=content,
+                category=category,
+                importance=importance,
+            )
 
-    result = save_self_memory(
-        content=content,
-        category=category,
-        importance=importance,
-    )
+            results.append(
+                f"{result} | {content}"
+            )
 
-    return (
-        f"{result} | {content}"
-    )
+
+    # ----------------------------
+    # SELF MEMORY
+    # ----------------------------
+
+    self_memory = data.get("self_memory")
+
+    if isinstance(self_memory, dict):
+        content = str(
+            self_memory.get("content", "")
+        ).strip()
+
+        category = str(
+            self_memory.get("category", "fact")
+        ).strip().lower()
+
+        importance = _normalize_importance(
+            self_memory.get("importance", 3)
+        )
+
+        if (
+            content
+            and len(content) <= 500
+            and category in SELF_MEMORY_CATEGORIES
+        ):
+            result = save_self_memory(
+                content=content,
+                category=category,
+                importance=importance,
+            )
+
+            results.append(
+                f"{result} | {content}"
+            )
+
+
+    if not results:
+        return None
+
+    return "\n".join(results)
+
+
+
