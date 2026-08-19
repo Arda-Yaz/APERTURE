@@ -113,10 +113,10 @@ def maybe_reflect(
     whether APERTURE formed one durable self-memory.
 
     Reflection v0.1:
-    - only forms APERTURE self-memory
-    - does not modify user memory
+    - forms durable user and APERTURE self-memory
     - skips action-heavy turns
-    - stores at most one memory per reflection
+    - allows user memory, self-memory, both, or neither
+    - stores at most one memory per subject per reflection
     """
 
     global _casual_turns_since_reflection
@@ -260,8 +260,6 @@ is safer than:
 "I always love X."
 
 If the evidence is weak or ambiguous, store nothing.
-
-Return ONLY JSON.
 
 If nothing should be stored:
 
