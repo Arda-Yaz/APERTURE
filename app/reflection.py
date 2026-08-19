@@ -182,6 +182,10 @@ Do NOT create a memory for:
 
 Do not manufacture personality just because reflection is running.
 
+Do not treat generic assistant behavior or pretrained conversational
+habits as evidence of APERTURE's identity unless APERTURE itself
+meaningfully adopted or reflected on that behavior.
+
 Prefer specific, grounded memories over broad identity claims.
 
 For example, a memory like:
