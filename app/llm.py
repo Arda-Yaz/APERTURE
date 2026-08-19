@@ -1,5 +1,8 @@
 from ollama import chat as ollama_chat
 from persona import build_persona_context
+from reflection import maybe_reflect
+
+
 
 from tools import (
     list_directory,
@@ -108,6 +111,36 @@ def inject_runtime_context(
 
     return runtime_messages
 
+
+
+def finalize_answer(
+    messages,
+    answer: str,
+    *,
+    used_action_tool: bool,
+    memory_operation_used: bool,
+):
+    messages.append({
+        "role": "assistant",
+        "content": answer,
+    })
+
+    reflection_result = maybe_reflect(
+        messages,
+        used_action_tool=used_action_tool,
+        memory_operation_used=memory_operation_used,
+    )
+
+    if reflection_result:
+        print(
+            f"\n[REFLECTION] "
+            f"{reflection_result}"
+        )
+
+    return answer
+
+
+
 def chat(messages):
     goal = get_current_goal(messages)
 
@@ -117,9 +150,9 @@ def chat(messages):
     messages,
     user_message=goal,
 )
-
     observations = []
     used_action_tool = False
+    memory_operation_used = False
 
     for step in range(MAX_STEPS):
 
@@ -141,12 +174,12 @@ def chat(messages):
 
             # Normal sohbet
             if not used_action_tool:
-                messages.append({
-                    "role": "assistant",
-                    "content": answer,
-                })
-
-                return answer
+                return finalize_answer(
+                    messages,
+                    answer,
+                    used_action_tool=used_action_tool,
+                    memory_operation_used=memory_operation_used,
+                )
 
             # Tool kullanıldıysa görev gerçekten tamamlandı mı?
             complete = is_task_complete(
@@ -156,12 +189,12 @@ def chat(messages):
             )
 
             if complete:
-                messages.append({
-                    "role": "assistant",
-                    "content": answer,
-                })
-
-                return answer
+                return finalize_answer(
+                    messages,
+                    answer,
+                    used_action_tool=used_action_tool,
+                    memory_operation_used=memory_operation_used,
+                )
 
             # Controller cevabı reddetti.
             working_messages.append({
@@ -204,10 +237,17 @@ Rules:
             if tool_name not in NON_ACTION_TOOLS:
                 used_action_tool = True
 
+            result = ""
+
             if tool_name not in TOOL_MAP:
                 result = f"TOOL_ERROR: Unknown tool: {tool_name}"
 
-            
+            if tool_name in {
+                "save_memory",
+                "save_self_memory",
+                "forget_memory",
+            }:
+                memory_operation_used = True
 
             else:
                 target = (

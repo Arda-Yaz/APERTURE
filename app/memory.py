@@ -17,6 +17,9 @@ VALID_CATEGORIES = {
     "goal",
     "project",
     "fact",
+    "opinion",
+    "relationship",
+    "decision",
 }
 
 VALID_SUBJECTS = {
@@ -442,7 +445,8 @@ def save_memory(
     to be useful in future conversations.
 
     category must be one of:
-    profile, preference, goal, project, fact.
+    profile, preference, goal, project, fact,
+    opinion, relationship, decision.
 
     importance is from 1 to 5.
     """
