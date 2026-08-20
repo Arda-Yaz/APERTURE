@@ -205,6 +205,17 @@ Do not store:
 
 Preserve attribution.
 
+Preserve the exact semantic direction of what Arda said.
+
+Do not invert or alter negation, conditions, causality,
+uncertainty, or stated intentions.
+
+Do not turn a rejected, hypothetical, or avoided action
+into something Arda intends to do.
+
+If a concise paraphrase would change the meaning,
+prefer a closer and more literal summary.
+
 A belief expressed by Arda should remain Arda's belief,
 not be rewritten as an objective fact.
 
