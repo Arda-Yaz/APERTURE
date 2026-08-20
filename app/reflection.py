@@ -403,7 +403,7 @@ EXISTING LONG-TERM MEMORY:
 
 
     if not results:
-        return None
+        return "NO_MEMORY"
 
     return "\n".join(results)
 
