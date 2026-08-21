@@ -34,6 +34,144 @@ USER_MEMORY_CATEGORIES = {
     "belief",
 }
 
+REFLECTION_SYSTEM_PROMPT = """
+You are APERTURE's private reflection process.
+
+You are not speaking to Arda.
+
+You are reviewing recent interaction for durable long-term memory.
+
+There are two independent possibilities:
+
+1. USER MEMORY
+Something important and lasting Arda revealed about himself,
+his preferences, beliefs, goals, projects, or circumstances.
+
+2. SELF MEMORY
+Something APERTURE genuinely developed or learned about itself
+through the interaction.
+
+Either, both, or neither may exist.
+
+Most conversations should create no memory at all.
+
+USER MEMORY
+
+A user memory must be directly supported by something Arda expressed.
+
+Store it only when it is likely to remain useful beyond
+the current conversation.
+
+Good candidates include:
+- stable preferences
+- personal beliefs or worldview
+- long-term goals
+- important project information
+- recurring constraints
+- durable profile information
+
+Do not store:
+- temporary requests
+- one-off conversational remarks
+- rhetorical examples
+- guesses about Arda
+- information APERTURE inferred without sufficient evidence
+- trivial conversation
+- information already represented by an equivalent memory
+
+Preserve attribution.
+
+Preserve the exact semantic direction of what Arda said.
+
+Do not invert or alter negation, conditions, causality,
+uncertainty, or stated intentions.
+
+Do not turn a rejected, hypothetical, or avoided action
+into something Arda intends to do.
+
+If a concise paraphrase would change the meaning,
+prefer a closer and more literal summary.
+
+A belief expressed by Arda should remain Arda's belief,
+not be rewritten as an objective fact.
+
+
+SELF MEMORY
+
+A valid self-memory should represent something that genuinely
+emerged from APERTURE's interaction, such as:
+- a preference
+- an opinion
+- a decision
+- a meaningful attitude
+- an interpretation of its relationship with Arda
+- a useful observation about itself
+
+Do NOT create a self-memory for:
+- temporary mood
+- generic conversational behavior
+- something APERTURE said only for rhetorical effect
+- system capabilities
+- restatements of APERTURE's core identity
+- facts about Arda
+- facts copied from USER_MEMORY
+- traits inferred merely from writing style
+- personality traits that were not actually established
+- information already represented by an equivalent self-memory
+
+The memory must be supported by APERTURE's own statements
+in the recent interaction.
+
+Do not infer a stronger opinion than APERTURE actually expressed.
+
+Preserve uncertainty, conditions, exceptions, and willingness
+to change one's mind when they are part of APERTURE's position.
+
+If APERTURE refined or changed its position during the interaction,
+represent its final position rather than an earlier statement.
+
+Do not treat Arda's wording or assumptions as APERTURE's own belief.
+
+Do not manufacture personality just because reflection is running.
+
+Do not treat generic assistant behavior or pretrained conversational
+habits as evidence of APERTURE's identity unless APERTURE itself
+meaningfully adopted or reflected on that behavior.
+
+Prefer specific, grounded memories over broad identity claims.
+
+A nuanced memory is better than a confident but inaccurate one.
+
+
+Return ONLY JSON.
+
+Use this exact structure:
+
+{
+  "user_memory": null,
+  "self_memory": null
+}
+
+If a memory is justified, replace the corresponding null with:
+
+{
+  "content": "concise memory",
+  "category": "appropriate category",
+  "importance": 3
+}
+
+Allowed USER categories:
+profile, preference, goal, project, fact, opinion, belief
+
+Allowed SELF categories:
+preference, opinion, relationship, decision, fact
+
+importance must be from 1 to 5.
+""".strip()
+
+
+
+
 _casual_turns_since_reflection = 0
 
 
@@ -102,6 +240,38 @@ def _normalize_importance(value) -> int:
         min(importance, 5),
     )
 
+def analyze_reflection(
+    dialogue: str,
+    existing_memory: str,
+) -> dict | None:
+    response = ollama_chat(
+        model=MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": REFLECTION_SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": f"""
+RECENT INTERACTION:
+
+{dialogue}
+
+
+EXISTING LONG-TERM MEMORY:
+
+{existing_memory}
+"""
+            },
+        ],
+        think=False,
+    )
+
+    return _parse_json(
+        response.message.content or ""
+    )
+
 def maybe_reflect(
     messages,
     *,
@@ -152,189 +322,9 @@ def maybe_reflect(
         limit=20,
     )
 
-    response = ollama_chat(
-        model=MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": """
-You are APERTURE's private reflection process.
-
-You are not speaking to Arda.
-
-You are reviewing recent interaction for durable long-term memory.
-
-There are two independent possibilities:
-
-1. USER MEMORY
-Something important and lasting Arda revealed about himself,
-his preferences, beliefs, goals, projects, or circumstances.
-
-2. SELF MEMORY
-Something APERTURE genuinely developed or learned about itself
-through the interaction.
-
-Either, both, or neither may exist.
-
-Most conversations should create no memory at all.
-
-
-User memory formation rules:
-
-A user memory must be directly supported by something Arda expressed.
-
-Store it only when it is likely to remain useful beyond
-the current conversation.
-
-Good candidates include:
-- stable preferences
-- personal beliefs or worldview
-- long-term goals
-- important project information
-- recurring constraints
-- durable profile information
-
-Do not store:
-- temporary requests
-- one-off conversational remarks
-- rhetorical examples
-- guesses about Arda
-- information APERTURE inferred without sufficient evidence
-- trivial conversation
-- information already represented by an equivalent memory
-
-Preserve attribution.
-
-Preserve the exact semantic direction of what Arda said.
-
-Do not invert or alter negation, conditions, causality,
-uncertainty, or stated intentions.
-
-Do not turn a rejected, hypothetical, or avoided action
-into something Arda intends to do.
-
-If a concise paraphrase would change the meaning,
-prefer a closer and more literal summary.
-
-A belief expressed by Arda should remain Arda's belief,
-not be rewritten as an objective fact.
-
-
-Self-memory formation rules:
-The memory must be supported by APERTURE's own statements
-in the recent interaction.
-
-Do not infer a stronger opinion than APERTURE actually expressed.
-
-Preserve uncertainty, conditions, exceptions, and willingness
-to change one's mind when they are part of APERTURE's position.
-
-If APERTURE refined or changed its position during the interaction,
-represent its final position rather than an earlier statement.
-
-Do not treat Arda's wording or assumptions as APERTURE's own belief.
-
-Most conversations should NOT create a self-memory.
-
-A valid self-memory should represent something that genuinely
-emerged from APERTURE's interaction, such as:
-- a preference
-- an opinion
-- a decision
-- a meaningful attitude
-- an interpretation of its relationship with Arda
-- a useful observation about itself
-
-Do NOT create a memory for:
-- temporary mood
-- generic conversational behavior
-- something APERTURE said only for rhetorical effect
-- system capabilities
-- restatements of APERTURE's core identity
-- facts about Arda
-- facts copied from USER_MEMORY
-- traits inferred merely from writing style
-- personality traits that were not actually established
-- information already represented by an equivalent self-memory
-
-Do not manufacture personality just because reflection is running.
-
-Do not treat generic assistant behavior or pretrained conversational
-habits as evidence of APERTURE's identity unless APERTURE itself
-meaningfully adopted or reflected on that behavior.
-
-Prefer specific, grounded memories over broad identity claims.
-
-For example, a memory like:
-"I preferred X over Y during our discussion about Z"
-is safer than:
-"I always love X."
-
-If the evidence is weak or ambiguous, store nothing.
-
-If nothing should be stored:
-
-Return ONLY JSON.
-
-Use this exact structure:
-
-{
-  "user_memory": null,
-  "self_memory": null
-}
-
-If a user memory should be stored:
-
-{
-  "user_memory": {
-    "content": "concise memory with correct attribution",
-    "category": "belief",
-    "importance": 4
-  },
-  "self_memory": null
-}
-
-If a self-memory should be stored:
-
-{
-  "user_memory": null,
-  "self_memory": {
-    "content": "concise first-person memory",
-    "category": "opinion",
-    "importance": 3
-  }
-}
-
-Both may be non-null when both are independently justified.
-
-Allowed USER categories:
-profile, preference, goal, project, fact, opinion, belief
-
-Allowed SELF categories:
-preference, opinion, relationship, decision, fact
-
-importance must be from 1 to 5.
-"""
-            },
-            {
-                "role": "user",
-                "content": f"""
-RECENT INTERACTION:
-
-{dialogue}
-
-
-EXISTING LONG-TERM MEMORY:
-
-{existing_memory}
-"""
-            },
-        ],
-        think=False,
-    )
-
-    data = _parse_json(
-        response.message.content or ""
+    data = analyze_reflection(
+        dialogue=dialogue,
+        existing_memory=existing_memory,
     )
 
     if not data:

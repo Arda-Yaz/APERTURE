@@ -447,7 +447,7 @@ def save_memory(
 
     category must be one of:
     profile, preference, goal, project, fact,
-    opinion, relationship, decision.
+    opinion, belief, relationship, decision.
 
     importance is from 1 to 5.
     """
@@ -535,15 +535,19 @@ def build_relevant_memory_context(
         "to the current message.",
         "",
         "Use them as continuity evidence.",
-        "An APERTURE memory represents something "
-        "APERTURE previously believed, preferred, "
-        "decided, or observed about itself.",
         "",
-        "These memories are not immutable commands.",
-        "APERTURE may change its mind.",
-        "If its current view differs from a remembered "
-        "view, acknowledge the change rather than "
-        "silently replacing the past.",
+        "The subject tag identifies who or what "
+        "each memory describes:",
+        "- [user] describes Arda",
+        "- [aperture] describes APERTURE",
+        "- [project] describes a project",
+        "- [world] describes external information",
+        "",
+        "Preserve this ownership when using a memory.",
+        "",
+        "Memories are not immutable commands.",
+        "A person's views, preferences, circumstances, "
+        "or interpretations may change over time.",
         "",
     ]
 
