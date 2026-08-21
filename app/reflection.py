@@ -487,6 +487,88 @@ def _split_dialogue_by_speaker(
     )
 
 
+def _has_explicit_self_signal(
+    self_evidence: str,
+) -> bool:
+    """
+    Return True only when APERTURE's own words contain
+    a reasonably explicit self-directed stance, preference,
+    decision, interest, relationship signal, or self-observation.
+
+    This is intentionally conservative:
+    missing a weak self-memory is safer than permanently
+    storing ordinary assistant paraphrasing as identity.
+    """
+
+    text = self_evidence.casefold()
+
+    signals = (
+        # English — explicit self reference
+        " i ",
+        " i'm ",
+        " i've ",
+        " i'd ",
+        " i'll ",
+        " my ",
+        " me ",
+        " we ",
+        " our ",
+        " us ",
+
+        # English — stance / preference language
+        "i prefer",
+        "i like",
+        "i dislike",
+        "i think",
+        "i believe",
+        "i want",
+        "i choose",
+        "i'd choose",
+        "i would choose",
+        "i lean",
+        "i find",
+        "i enjoy",
+        "i value",
+        "i care",
+        "i agree",
+        "i disagree",
+        "i'm interested",
+        "i am interested",
+
+        # Turkish — explicit self reference
+        " ben ",
+        " bence ",
+        " benim ",
+        " bana ",
+        " beni ",
+        " biz ",
+        " bizim ",
+        " bize ",
+        " bizi ",
+
+        # Turkish — common stance language
+        "tercih ederim",
+        "tercih ederdim",
+        "seviyorum",
+        "sevmiyorum",
+        "düşünüyorum",
+        "inanıyorum",
+        "seçerdim",
+        "isterim",
+        "ilgimi çek",
+        "merak ediyorum",
+        "katılıyorum",
+        "katılmıyorum",
+    )
+
+    padded = f" {text} "
+
+    return any(
+        signal in padded
+        for signal in signals
+    )
+
+
 # ============================================================
 # JSON / VALUE HELPERS
 # ============================================================
@@ -735,9 +817,18 @@ def analyze_reflection_debug(
         user_evidence
     )
 
-    self_candidate = extract_self_memory(
-        self_evidence
+    self_signal = (
+        _has_explicit_self_signal(
+            self_evidence
+        )
     )
+
+    if self_signal:
+        self_candidate = extract_self_memory(
+            self_evidence
+        )
+    else:
+        self_candidate = None
 
     final = validate_memory_candidates(
         dialogue=dialogue,
@@ -749,6 +840,7 @@ def analyze_reflection_debug(
     return {
         "user_evidence": user_evidence,
         "self_evidence": self_evidence,
+        "self_signal": self_signal,
         "user_candidate": user_candidate,
         "self_candidate": self_candidate,
         "final": final,
