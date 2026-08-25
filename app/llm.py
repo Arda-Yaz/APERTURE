@@ -31,17 +31,150 @@ MODEL = "qwen3:8b"
 MAX_STEPS = 8
 
 
-TOOLS = [
+BASE_TOOLS = [
     list_directory,
     read_file,
     write_file,
     open_app,
     run_terminal,
     save_memory,
-    save_self_memory,
     search_memory,
     forget_memory,
 ]
+
+
+def should_expose_self_memory_tool(
+    user_message: str,
+) -> bool:
+    """
+    Expose save_self_memory only when Arda explicitly asks
+    APERTURE to remember/store something about itself.
+
+    Normal self-expression must go through Reflection instead.
+    """
+
+    text = " ".join(
+        str(user_message)
+        .casefold()
+        .split()
+    )
+
+    if not text:
+        return False
+
+    # Recall questions are not requests to create memory.
+    recall_only = (
+        "do you remember ",
+        "did you remember ",
+        "hatırlıyor musun",
+        "hatırladın mı",
+    )
+
+    if any(
+        text.startswith(marker)
+        for marker in recall_only
+    ):
+        return False
+
+    explicit_patterns = (
+        # English
+        "remember this about yourself",
+        "remember that about yourself",
+        "remember that you ",
+        "remember you ",
+        "remember your ",
+        "please remember that you ",
+        "please remember your ",
+        "i want you to remember that you ",
+        "i want you to remember your ",
+        "save this about yourself",
+        "save that about yourself",
+        "save that you ",
+        "save your ",
+        "store this about yourself",
+        "store that about yourself",
+        "store that you ",
+        "store your ",
+        "don't forget that you ",
+        "don't forget you ",
+        "don't forget your ",
+        "do not forget that you ",
+        "do not forget you ",
+        "do not forget your ",
+
+        # Turkish
+        "kendin hakkında bunu hatırla",
+        "kendin hakkında şunu hatırla",
+        "kendinle ilgili bunu hatırla",
+        "kendinle ilgili şunu hatırla",
+        "kendin hakkında bunu kaydet",
+        "kendin hakkında şunu kaydet",
+        "kendinle ilgili bunu kaydet",
+        "kendinle ilgili şunu kaydet",
+    )
+
+    if any(
+        pattern in text
+        for pattern in explicit_patterns
+    ):
+        return True
+
+    # Allows forms such as:
+    # "Remember that preference about yourself."
+    if (
+        "about yourself" in text
+        and any(
+            marker in text
+            for marker in (
+                "remember",
+                "save",
+                "store",
+                "don't forget",
+                "do not forget",
+            )
+        )
+    ):
+        return True
+
+    # Slightly broader Turkish fallback.
+    if (
+        any(
+            marker in text
+            for marker in (
+                "kendin",
+                "kendinle",
+                "kendin hakkında",
+            )
+        )
+        and any(
+            marker in text
+            for marker in (
+                "hatırla",
+                "kaydet",
+                "unutma",
+            )
+        )
+    ):
+        return True
+
+    return False
+
+
+def get_tools_for_goal(
+    goal: str,
+):
+    tools = list(
+        BASE_TOOLS
+    )
+
+    if should_expose_self_memory_tool(
+        goal
+    ):
+        tools.append(
+            save_self_memory
+        )
+
+    return tools
 
 
 TOOL_MAP = {
@@ -204,14 +337,32 @@ def finalize_answer(
 
 
 def chat(messages):
-    goal = get_current_goal(messages)
+    goal = get_current_goal(
+        messages
+    )
+
+    available_tools = (
+        get_tools_for_goal(
+            goal
+        )
+    )
+
+    self_memory_tool_allowed = (
+        should_expose_self_memory_tool(
+            goal
+        )
+    )
 
     # Agent'ın iç çalışma geçmişi.
-    # Tool sonuçları ve controller mesajları kalıcı sohbeti kirletmez.
-    working_messages = inject_runtime_context(
-    messages,
-    user_message=goal,
-)
+    # Tool sonuçları ve controller mesajları
+    # kalıcı sohbeti kirletmez.
+    working_messages = (
+        inject_runtime_context(
+            messages,
+            user_message=goal,
+        )
+    )
+
     observations = []
     used_action_tool = False
     memory_operation_used = False
@@ -221,41 +372,59 @@ def chat(messages):
         response = ollama_chat(
             model=MODEL,
             messages=working_messages,
-            tools=TOOLS,
+            tools=available_tools,
             think=False,
         )
 
-        working_messages.append(response.message)
+        working_messages.append(
+            response.message
+        )
 
         # --------------------------------
         # MODEL TOOL ÇAĞIRMADI
         # --------------------------------
         if not response.message.tool_calls:
 
-            answer = response.message.content or ""
+            answer = (
+                response.message.content
+                or ""
+            )
 
             # Normal sohbet
             if not used_action_tool:
                 return finalize_answer(
                     messages,
                     answer,
-                    used_action_tool=used_action_tool,
-                    memory_operation_used=memory_operation_used,
+                    used_action_tool=(
+                        used_action_tool
+                    ),
+                    memory_operation_used=(
+                        memory_operation_used
+                    ),
                 )
 
-            # Tool kullanıldıysa görev gerçekten tamamlandı mı?
+            # Tool kullanıldıysa görev
+            # gerçekten tamamlandı mı?
             complete = is_task_complete(
                 goal=goal,
                 answer=answer,
-                observations="\n\n".join(observations),
+                observations=(
+                    "\n\n".join(
+                        observations
+                    )
+                ),
             )
 
             if complete:
                 return finalize_answer(
                     messages,
                     answer,
-                    used_action_tool=used_action_tool,
-                    memory_operation_used=memory_operation_used,
+                    used_action_tool=(
+                        used_action_tool
+                    ),
+                    memory_operation_used=(
+                        memory_operation_used
+                    ),
                 )
 
             # Controller cevabı reddetti.
@@ -291,12 +460,54 @@ Rules:
         # --------------------------------
         # MODEL TOOL ÇAĞIRDI
         # --------------------------------
-        for call in response.message.tool_calls:
+        for call in (
+            response.message.tool_calls
+        ):
 
-            tool_name = call.function.name
-            arguments = call.function.arguments
+            tool_name = (
+                call.function.name
+            )
 
-            if tool_name not in NON_ACTION_TOOLS:
+            arguments = (
+                call.function.arguments
+            )
+
+            # Defense in depth:
+            # save_self_memory is unavailable unless
+            # Arda explicitly requested self-memory.
+            if (
+                tool_name
+                == "save_self_memory"
+                and not self_memory_tool_allowed
+            ):
+                result = (
+                    "TOOL_ERROR: save_self_memory "
+                    "is only available when Arda "
+                    "explicitly asks APERTURE to "
+                    "remember something about itself."
+                )
+
+                print(
+                    f"\n[TOOL BLOCKED] "
+                    f"{tool_name}"
+                )
+
+                print(
+                    f"[RESULT] {result}"
+                )
+
+                working_messages.append({
+                    "role": "tool",
+                    "tool_name": tool_name,
+                    "content": result,
+                })
+
+                continue
+
+            if (
+                tool_name
+                not in NON_ACTION_TOOLS
+            ):
                 used_action_tool = True
 
             if tool_name in {
@@ -308,60 +519,95 @@ Rules:
 
             if tool_name not in TOOL_MAP:
                 result = (
-                    f"TOOL_ERROR: Unknown tool: {tool_name}"
+                    f"TOOL_ERROR: "
+                    f"Unknown tool: "
+                    f"{tool_name}"
                 )
 
             else:
                 target = (
                     arguments.get("path")
-                    or arguments.get("app_name")
+                    or arguments.get(
+                        "app_name"
+                    )
                     or arguments.get("cwd")
-                    or arguments.get("command")
-                    or arguments.get("memory_id")
+                    or arguments.get(
+                        "command"
+                    )
+                    or arguments.get(
+                        "memory_id"
+                    )
                     or ""
                 )
 
-                print(f"\n[TOOL] {tool_name}: {target}")
+                print(
+                    f"\n[TOOL] "
+                    f"{tool_name}: "
+                    f"{target}"
+                )
 
-                if check_permission(tool_name, target):
+                if check_permission(
+                    tool_name,
+                    target,
+                ):
                     try:
-                        result = TOOL_MAP[tool_name](
-                            **arguments
+                        result = (
+                            TOOL_MAP[
+                                tool_name
+                            ](
+                                **arguments
+                            )
                         )
 
                         if (
-                            tool_name == "read_file"
-                            and not result.startswith("READ_ERROR")
+                            tool_name
+                            == "read_file"
+                            and not result.startswith(
+                                "READ_ERROR"
+                            )
                         ):
                             observations.append(
-                                f"EXACT_FILE_CONTENT:\n{result}"
+                                "EXACT_FILE_CONTENT:"
+                                f"\n{result}"
                             )
+
                         else:
                             observations.append(
-                                f"{tool_name}: {result}"
+                                f"{tool_name}: "
+                                f"{result}"
                             )
 
                     except Exception as e:
                         result = (
-                            f"TOOL_ERROR: "
-                            f"{type(e).__name__}: {e}"
+                            "TOOL_ERROR: "
+                            f"{type(e).__name__}: "
+                            f"{e}"
                         )
+
                 else:
-                    result = "Permission denied by user."
+                    result = (
+                        "Permission denied "
+                        "by user."
+                    )
 
             # Şimdilik debug için gösteriyoruz
-            print(f"[RESULT] {result[:500]}")
+            print(
+                f"[RESULT] "
+                f"{result[:500]}"
+            )
 
-            # Tool sonucunu sadece çalışma geçmişine ekle
+            # Tool sonucunu sadece
+            # çalışma geçmişine ekle
             working_messages.append({
                 "role": "tool",
                 "tool_name": tool_name,
                 "content": result,
             })
 
-    return "Task stopped because maximum agent steps were reached."
-
-
+    return (
+        "Task stopped because maximum "
+        "agent steps were reached."
+    )
 
 
 
