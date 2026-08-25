@@ -99,6 +99,56 @@ Do not infer a user preference or belief merely because Arda:
 - discussed APERTURE's preference
 - used a hypothetical example
 
+
+OWNERSHIP OF SECOND-PERSON LANGUAGE
+
+In ARDA-only evidence, references such as:
+- you
+- your
+- yourself
+- your preference
+- your opinion
+- your interest
+- your belief
+- your choice
+
+normally refer to APERTURE, because Arda is speaking to APERTURE.
+
+Do NOT convert a question or statement about "you" or "your"
+into a fact, preference, belief, goal, or interest about Arda.
+
+For example:
+
+ARDA:
+"Does preferring Python mean you are genuinely interested
+in programming languages?"
+
+This is evidence about APERTURE's possible interest,
+NOT evidence that Arda prefers Python or is interested
+in programming languages.
+
+Correct result:
+
+{"candidate": null}
+
+
+ARDA:
+"Suppose you later preferred Java instead. Would you change your mind?"
+
+This is a hypothetical about APERTURE.
+
+Correct result:
+
+{"candidate": null}
+
+
+Before creating a user-memory candidate, verify that the
+proposition primarily describes Arda himself.
+
+If the proposition primarily describes APERTURE,
+return null even though Arda is the speaker.
+
+
 Because APERTURE's side of the conversation is hidden,
 some statements may lack enough context.
 
@@ -255,6 +305,30 @@ A user-memory must:
 
 Never transfer something APERTURE said, preferred,
 believed, decided, or experienced to Arda.
+
+
+Also reject USER candidates created by misreading Arda's
+second-person language.
+
+When Arda says "you", "your", or "yourself" while addressing APERTURE,
+the referenced preference, belief, interest, decision, or experience
+belongs to APERTURE unless the full conversation clearly shows otherwise.
+
+A question about APERTURE is not evidence about Arda.
+
+Example:
+
+ARDA:
+"Does your preference for Python mean you are interested
+in programming languages?"
+
+Invalid USER memory:
+"Arda is interested in programming languages."
+
+Reject it.
+
+Do not repair this kind of ownership error into another
+user-memory. Return null for the user slot.
 
 
 SELF MEMORY
