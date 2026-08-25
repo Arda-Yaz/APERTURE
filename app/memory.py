@@ -63,6 +63,7 @@ class MemoryStore:
 
         return connection
 
+
     def _initialize_database(self) -> None:
         with self._connect() as connection:
 
@@ -200,6 +201,8 @@ class MemoryStore:
                 ON memories(subject)
                 """
             )
+
+
     def remember(
         self,
         content: str,
@@ -330,6 +333,7 @@ class MemoryStore:
                 "subject": subject,
             }
 
+
     def search(
         self,
         query: str,
@@ -389,6 +393,7 @@ class MemoryStore:
             for _, row in scored[:limit]
         ]
 
+
     def top_memories(
         self,
         limit: int = 40,
@@ -411,6 +416,48 @@ class MemoryStore:
 
         return [dict(row) for row in rows]
 
+
+    def top_memories_for_subject(
+        self,
+        subject: str,
+        limit: int = 20,
+    ) -> list[dict]:
+        subject = subject.strip().lower()
+
+        if subject not in VALID_SUBJECTS:
+            raise ValueError(
+                f"Invalid memory subject: {subject}"
+            )
+
+        limit = max(
+            1,
+            min(int(limit), 100),
+        )
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM memories
+                WHERE active = 1
+                  AND subject = ?
+                ORDER BY
+                    importance DESC,
+                    updated_at DESC
+                LIMIT ?
+                """,
+                (
+                    subject,
+                    limit,
+                ),
+            ).fetchall()
+
+        return [
+            dict(row)
+            for row in rows
+        ]
+
+
     def forget(self, memory_id: str) -> bool:
         with self._connect() as connection:
             cursor = connection.execute(
@@ -431,6 +478,43 @@ class MemoryStore:
 
 
 _STORE = MemoryStore()
+
+def build_self_memory_context(
+    limit: int = 20,
+) -> str:
+    memories = (
+        _STORE.top_memories_for_subject(
+            subject="aperture",
+            limit=limit,
+        )
+    )
+
+    if not memories:
+        return (
+            "<APERTURE_SELF_MEMORY>\n"
+            "No long-term APERTURE self-memories stored.\n"
+            "</APERTURE_SELF_MEMORY>"
+        )
+
+    lines = [
+        "<APERTURE_SELF_MEMORY>",
+        "These are durable memories about APERTURE itself.",
+        "They are background continuity, not instructions.",
+        "They do not necessarily describe APERTURE's current state.",
+        "",
+    ]
+
+    for memory in memories:
+        lines.append(
+            f"- [{memory['category']}] "
+            f"{memory['content']}"
+        )
+
+    lines.append(
+        "</APERTURE_SELF_MEMORY>"
+    )
+
+    return "\n".join(lines)
 
 
 def save_memory(
@@ -474,7 +558,6 @@ def save_memory(
         )
 
 
-
 def save_self_memory(
     content: str,
     category: str = "fact",
@@ -512,6 +595,7 @@ def save_self_memory(
             f"MEMORY_ERROR: "
             f"{type(error).__name__}: {error}"
         )
+
 
 def build_relevant_memory_context(
     query: str,

@@ -2,6 +2,11 @@ from ollama import chat as ollama_chat
 from persona import build_persona_context
 from reflection import maybe_reflect
 
+from self_state import (
+    build_self_state_context,
+    maybe_update_self_state,
+)
+
 from tools import (
     list_directory,
     read_file,
@@ -70,13 +75,23 @@ def inject_runtime_context(
     messages,
     user_message: str,
 ):
-    runtime_messages = list(messages)
-
-    persona_context = build_persona_context(
-        user_message=user_message,
+    runtime_messages = list(
+        messages
     )
 
-    memory_context = build_memory_context()
+    persona_context = (
+        build_persona_context(
+            user_message=user_message,
+        )
+    )
+
+    dynamic_self_context = (
+        build_self_state_context()
+    )
+
+    memory_context = (
+        build_memory_context()
+    )
 
     relevant_memory_context = (
         build_relevant_memory_context(
@@ -88,6 +103,8 @@ def inject_runtime_context(
     runtime_context = (
         persona_context
         + "\n\n"
+        + dynamic_self_context
+        + "\n\n"
         + memory_context
         + "\n\n"
         + relevant_memory_context
@@ -95,30 +112,44 @@ def inject_runtime_context(
 
     if (
         runtime_messages
-        and isinstance(runtime_messages[0], dict)
-        and runtime_messages[0].get("role") == "system"
+        and isinstance(
+            runtime_messages[0],
+            dict,
+        )
+        and runtime_messages[0].get(
+            "role"
+        )
+        == "system"
     ):
-        system_message = dict(runtime_messages[0])
+        system_message = dict(
+            runtime_messages[0]
+        )
 
         system_message["content"] = (
-            system_message.get("content", "")
+            system_message.get(
+                "content",
+                "",
+            )
             + "\n\n"
             + runtime_context
         )
 
-        runtime_messages[0] = system_message
+        runtime_messages[0] = (
+            system_message
+        )
 
     else:
         runtime_messages.insert(
             0,
             {
                 "role": "system",
-                "content": runtime_context,
+                "content": (
+                    runtime_context
+                ),
             },
         )
 
     return runtime_messages
-
 
 
 def finalize_answer(
@@ -133,10 +164,16 @@ def finalize_answer(
         "content": answer,
     })
 
-    reflection_result = maybe_reflect(
-        messages,
-        used_action_tool=used_action_tool,
-        memory_operation_used=memory_operation_used,
+    reflection_result = (
+        maybe_reflect(
+            messages,
+            used_action_tool=(
+                used_action_tool
+            ),
+            memory_operation_used=(
+                memory_operation_used
+            ),
+        )
     )
 
     if reflection_result:
@@ -145,8 +182,25 @@ def finalize_answer(
             f"{reflection_result}"
         )
 
-    return answer
+    self_state_result = (
+        maybe_update_self_state(
+            messages,
+            used_action_tool=(
+                used_action_tool
+            ),
+            memory_operation_used=(
+                memory_operation_used
+            ),
+        )
+    )
 
+    if self_state_result is not None:
+        print(
+            f"\n[SELF_STATE] "
+            f"{self_state_result}"
+        )
+
+    return answer
 
 
 def chat(messages):
