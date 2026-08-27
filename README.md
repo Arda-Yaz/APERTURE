@@ -231,7 +231,14 @@ As of the current development checkpoint, APERTURE includes:
 - explicit self-signal filtering
 - deterministic memory-module inference
 - debug-friendly reflection pipeline
-
+- dynamic self-state
+- current orientation tracking
+- emerging-interest tracking
+- unresolved-position tracking
+- temporary relationship context
+- self-state replacement and change-of-mind handling
+- explicit separation between temporary state and durable self-memory
+- guarded self-memory tool access
 ---
 
 # Architecture
@@ -269,12 +276,14 @@ The main runtime context currently combines:
 ```text
 Core Persona
 +
+Dynamic Self
++
 Long-Term Memory
 +
 Relevant Memory
 ```
 
-A **Dynamic Self** layer is planned next.
+
 
 ---
 
@@ -1458,7 +1467,13 @@ This is a deliberate tradeoff:
 
 > missing a weak identity signal is safer than permanently storing generic assistant behavior as identity.
 
-### No Dynamic Self yet
+### Dynamic Self is session-scoped
+
+Dynamic Self currently lives only for the active process/session.
+It is intentionally not persisted as long-term memory.
+
+Cross-session short-term state restoration may be explored later
+if real usage shows that it is useful.
 
 APERTURE currently has:
 
@@ -1522,7 +1537,10 @@ The repository does not currently declare an open-source license.
 
 ## Identity / Cognition
 
-- [ ] Dynamic Self / Internal State
+- [x] Dynamic Self / Internal State
+- [ ] Experience / Trajectory layer
+- [ ] Automated identity/cognition regression suite
+- [ ] Memory provenance and temporal validity
 - [ ] Relationship Model
 - [ ] State continuity
 - [ ] Idle cognition
@@ -1735,7 +1753,9 @@ Minimal emergent identity            ✅
 Automatic memory formation           ✅
 Validated reflection                 ✅
 Reflection regression tests          ✅
-Dynamic Self                         🚧 Next
+Dynamic Self                         ✅
+Experience / Trajectory              🚧 Next
+Relationship Model                   ⏳ Planned
 Relationship Model                   ⏳ Planned
 Idle cognition                       ⏳ Planned
 Workspace / coding                   ⏳ Planned
