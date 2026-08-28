@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import contextmanager
 
 import json
 import sqlite3
@@ -243,10 +244,10 @@ class ExperienceStore:
         self._initialize_database()
 
 
+    @contextmanager
     def _connect(
         self,
-    ) -> sqlite3.Connection:
-
+    ):
         connection = (
             sqlite3.connect(
                 self.db_path
@@ -261,7 +262,16 @@ class ExperienceStore:
             "PRAGMA foreign_keys = ON"
         )
 
-        return connection
+        try:
+            yield connection
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+        finally:
+            connection.close()
 
 
     def _initialize_database(
@@ -562,6 +572,89 @@ class ExperienceStore:
                 ORDER BY seq ASC
                 """,
                 (turn_id,),
+            ).fetchall()
+
+        return [
+            _row_to_event(row)
+            for row in rows
+        ]
+
+
+    def recent_observed_message_events(
+        self,
+        episode_id: str,
+        *,
+        limit: int = 6,
+    ) -> list[dict]:
+
+        limit = max(
+            1,
+            min(
+                int(limit),
+                100,
+            ),
+        )
+
+        with self._connect() as connection:
+
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM events
+                WHERE episode_id = ?
+                  AND event_class = 'observed'
+                  AND event_type IN (
+                      'user_message',
+                      'assistant_message'
+                  )
+                ORDER BY seq DESC
+                LIMIT ?
+                """,
+                (
+                    episode_id,
+                    limit,
+                ),
+            ).fetchall()
+
+        rows = list(
+            reversed(rows)
+        )
+
+        return [
+            _row_to_event(row)
+            for row in rows
+        ]
+
+
+    def events_by_ids(
+        self,
+        event_ids: list[str],
+    ) -> list[dict]:
+
+        cleaned_ids = [
+            str(event_id).strip()
+            for event_id in event_ids
+            if str(event_id).strip()
+        ]
+
+        if not cleaned_ids:
+            return []
+
+        placeholders = ", ".join(
+            "?"
+            for _ in cleaned_ids
+        )
+
+        with self._connect() as connection:
+
+            rows = connection.execute(
+                f"""
+                SELECT *
+                FROM events
+                WHERE id IN ({placeholders})
+                ORDER BY seq ASC
+                """,
+                cleaned_ids,
             ).fetchall()
 
         return [
@@ -930,4 +1023,155 @@ def get_turn_events(
         _STORE.turn_events(
             turn_id
         )
+    )
+
+
+def get_recent_observed_message_events(
+    *,
+    limit: int = 6,
+) -> list[dict]:
+
+    episode_id = (
+        get_current_episode_id(
+            create_if_missing=False,
+        )
+    )
+
+    if episode_id is None:
+        return []
+
+    return (
+        _STORE
+        .recent_observed_message_events(
+            episode_id,
+            limit=limit,
+        )
+    )
+
+
+def get_events_by_ids(
+    event_ids: list[str],
+) -> list[dict]:
+
+    return (
+        _STORE.events_by_ids(
+            event_ids
+        )
+    )
+
+
+def record_reflection_analysis(
+    turn_id: str,
+    *,
+    debug_result: dict,
+    evidence_event_ids: list[str],
+) -> dict:
+
+    final = (
+        debug_result.get("final")
+        if isinstance(
+            debug_result,
+            dict,
+        )
+        else None
+    )
+
+    return record_event(
+        turn_id=turn_id,
+        event_type=(
+            "reflection_analysis"
+        ),
+        event_class="derived",
+        actor="reflection",
+        content=json.dumps(
+            final,
+            ensure_ascii=False,
+        ),
+        metadata={
+            "evidence_event_ids":
+                evidence_event_ids,
+
+            "user_evidence":
+                debug_result.get(
+                    "user_evidence"
+                ),
+
+            "self_evidence":
+                debug_result.get(
+                    "self_evidence"
+                ),
+
+            "self_signal":
+                debug_result.get(
+                    "self_signal"
+                ),
+
+            "user_candidate":
+                debug_result.get(
+                    "user_candidate"
+                ),
+
+            "self_candidate":
+                debug_result.get(
+                    "self_candidate"
+                ),
+
+            "final":
+                final,
+        },
+    )
+
+
+def record_memory_formation(
+    turn_id: str,
+    *,
+    memory_record: dict,
+    evidence_event_ids: list[str],
+) -> dict:
+
+    return record_event(
+        turn_id=turn_id,
+        event_type=(
+            "memory_formed"
+        ),
+        event_class="derived",
+        actor="reflection",
+        content=(
+            memory_record.get(
+                "content",
+                "",
+            )
+        ),
+        metadata={
+            "memory_id":
+                memory_record.get("id"),
+
+            "subject":
+                memory_record.get(
+                    "subject"
+                ),
+
+            "category":
+                memory_record.get(
+                    "category"
+                ),
+
+            "importance":
+                memory_record.get(
+                    "importance"
+                ),
+
+            "status":
+                memory_record.get(
+                    "status"
+                ),
+
+            "source":
+                memory_record.get(
+                    "source"
+                ),
+
+            "evidence_event_ids":
+                evidence_event_ids,
+        },
     )

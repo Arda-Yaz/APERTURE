@@ -6,8 +6,13 @@ from ollama import chat as ollama_chat
 
 from memory import (
     build_memory_context,
-    save_memory,
-    save_self_memory,
+    save_reflection_memory,
+)
+
+from experience import (
+    get_recent_observed_message_events,
+    record_reflection_analysis,
+    record_memory_formation,
 )
 
 
@@ -98,6 +103,59 @@ Do not infer a user preference or belief merely because Arda:
 - mentioned an option
 - discussed APERTURE's preference
 - used a hypothetical example
+
+
+CANDIDATE SELECTION ACROSS MULTIPLE USER MESSAGES
+
+The ARDA-only evidence may contain several different messages.
+
+Evaluate each Arda statement independently.
+
+Some messages may:
+- ask APERTURE questions
+- discuss APERTURE
+- use hypothetical examples
+- contain no durable information about Arda
+
+Ignore those messages individually.
+
+Their presence must NOT cause you to return null
+if another message in the same evidence contains
+clear durable information about Arda.
+
+After ignoring non-user-information messages,
+select the strongest remaining durable fact,
+preference, belief, goal, project fact, or constraint.
+
+Example:
+
+ARDA:
+"If you had to choose Python or Java for yourself,
+which would you prefer?"
+
+ARDA:
+"What makes that preference meaningful to you?"
+
+ARDA:
+"I usually prefer working late at night."
+
+The first two messages are about APERTURE
+and must not become user memory.
+
+The third message directly describes Arda.
+
+Correct result:
+
+{
+  "candidate": {
+    "content": "Arda usually prefers working late at night.",
+    "category": "preference",
+    "importance": 3
+  }
+}
+
+Return null only when NONE of Arda's statements
+contains a justified durable user-memory candidate.
 
 
 OWNERSHIP OF SECOND-PERSON LANGUAGE
@@ -950,15 +1008,17 @@ def maybe_reflect(
     *,
     used_action_tool: bool,
     memory_operation_used: bool,
+    turn_id: str | None = None,
 ) -> str | None:
     """
     Occasionally review recent casual conversation.
 
-    Reflection v0.1:
+    Reflection:
     - forms durable user and APERTURE self-memory
     - skips action-heavy turns
     - uses separate USER and SELF extraction channels
     - validates candidates against the full conversation
+    - stores provenance pointing back to observed experience
     - stores at most one memory per subject per reflection
     """
 
@@ -980,12 +1040,17 @@ def maybe_reflect(
 
     _casual_turns_since_reflection = 0
 
-    dialogue = _recent_dialogue(
-        messages,
-        limit=6,
+    dialogue = (
+        _recent_dialogue(
+            messages,
+            limit=6,
+        )
     )
 
-    if len(dialogue) < 80:
+    if (
+        len(dialogue)
+        < 80
+    ):
         return None
 
     existing_memory = (
@@ -994,28 +1059,81 @@ def maybe_reflect(
         )
     )
 
-    data = analyze_reflection(
-        dialogue=dialogue,
-        existing_memory=existing_memory,
+    # ========================================================
+    # SOURCE EXPERIENCE WINDOW
+    # ========================================================
+
+    evidence_events = (
+        get_recent_observed_message_events(
+            limit=6,
+        )
     )
 
-    if not isinstance(data, dict):
+    evidence_event_ids = [
+        event["id"]
+        for event
+        in evidence_events
+    ]
+
+    # ========================================================
+    # FULL DEBUG PIPELINE
+    # ========================================================
+
+    debug_result = (
+        analyze_reflection_debug(
+            dialogue=dialogue,
+            existing_memory=(
+                existing_memory
+            ),
+        )
+    )
+
+    if turn_id is not None:
+
+        record_reflection_analysis(
+            turn_id,
+            debug_result=(
+                debug_result
+            ),
+            evidence_event_ids=(
+                evidence_event_ids
+            ),
+        )
+
+    data = (
+        debug_result.get(
+            "final"
+        )
+        if isinstance(
+            debug_result,
+            dict,
+        )
+        else None
+    )
+
+    if not isinstance(
+        data,
+        dict,
+    ):
         return None
 
     results = []
 
-    # --------------------------------------------------------
+    # ========================================================
     # USER MEMORY
-    # --------------------------------------------------------
+    # ========================================================
 
-    user_memory = data.get(
-        "user_memory"
+    user_memory = (
+        data.get(
+            "user_memory"
+        )
     )
 
     if isinstance(
         user_memory,
         dict,
     ):
+
         content = str(
             user_memory.get(
                 "content",
@@ -1041,32 +1159,61 @@ def maybe_reflect(
 
         if (
             content
-            and len(content) <= 500
+            and len(content)
+            <= 500
             and category
             in USER_MEMORY_CATEGORIES
         ):
-            result = save_memory(
-                content=content,
-                category=category,
-                importance=importance,
+
+            memory_record = (
+                save_reflection_memory(
+                    subject="user",
+                    content=content,
+                    category=category,
+                    importance=importance,
+                    evidence_event_ids=(
+                        evidence_event_ids
+                    ),
+                )
             )
+
+            if turn_id is not None:
+
+                record_memory_formation(
+                    turn_id,
+                    memory_record=(
+                        memory_record
+                    ),
+                    evidence_event_ids=(
+                        evidence_event_ids
+                    ),
+                )
 
             results.append(
-                f"{result} | {content}"
+                "MEMORY_SAVED: "
+                f"id={memory_record['id']} "
+                f"category="
+                f"{memory_record['category']} "
+                f"status="
+                f"{memory_record['status']} "
+                f"| {content}"
             )
 
-    # --------------------------------------------------------
+    # ========================================================
     # SELF MEMORY
-    # --------------------------------------------------------
+    # ========================================================
 
-    self_memory = data.get(
-        "self_memory"
+    self_memory = (
+        data.get(
+            "self_memory"
+        )
     )
 
     if isinstance(
         self_memory,
         dict,
     ):
+
         content = str(
             self_memory.get(
                 "content",
@@ -1092,18 +1239,44 @@ def maybe_reflect(
 
         if (
             content
-            and len(content) <= 500
+            and len(content)
+            <= 500
             and category
             in SELF_MEMORY_CATEGORIES
         ):
-            result = save_self_memory(
-                content=content,
-                category=category,
-                importance=importance,
+
+            memory_record = (
+                save_reflection_memory(
+                    subject="aperture",
+                    content=content,
+                    category=category,
+                    importance=importance,
+                    evidence_event_ids=(
+                        evidence_event_ids
+                    ),
+                )
             )
 
+            if turn_id is not None:
+
+                record_memory_formation(
+                    turn_id,
+                    memory_record=(
+                        memory_record
+                    ),
+                    evidence_event_ids=(
+                        evidence_event_ids
+                    ),
+                )
+
             results.append(
-                f"{result} | {content}"
+                "SELF_MEMORY_SAVED: "
+                f"id={memory_record['id']} "
+                f"category="
+                f"{memory_record['category']} "
+                f"status="
+                f"{memory_record['status']} "
+                f"| {content}"
             )
 
     if not results:
@@ -1112,3 +1285,4 @@ def maybe_reflect(
     return "\n".join(
         results
     )
+

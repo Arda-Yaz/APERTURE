@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import contextmanager
+
+import json
 import re
 import sqlite3
 import unicodedata
@@ -45,6 +48,127 @@ def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"\w+", _normalize(text), flags=re.UNICODE))
 
 
+def _normalize_evidence_event_ids(
+    values,
+) -> list[str]:
+
+    if values is None:
+        return []
+
+    if isinstance(
+        values,
+        str,
+    ):
+        values = [values]
+
+    if not isinstance(
+        values,
+        (list, tuple, set),
+    ):
+        return []
+
+    cleaned = []
+    seen = set()
+
+    for value in values:
+
+        event_id = str(
+            value
+        ).strip()
+
+        if not event_id:
+            continue
+
+        if event_id in seen:
+            continue
+
+        seen.add(
+            event_id
+        )
+
+        cleaned.append(
+            event_id
+        )
+
+    return cleaned
+
+
+def _encode_evidence_event_ids(
+    values,
+) -> str:
+
+    return json.dumps(
+        _normalize_evidence_event_ids(
+            values
+        ),
+        ensure_ascii=False,
+    )
+
+
+def _decode_evidence_event_ids(
+    raw,
+) -> list[str]:
+
+    if not raw:
+        return []
+
+    try:
+        parsed = json.loads(
+            raw
+        )
+
+    except Exception:
+        return []
+
+    return (
+        _normalize_evidence_event_ids(
+            parsed
+        )
+    )
+
+
+def _merge_evidence_event_ids(
+    existing,
+    new,
+) -> list[str]:
+
+    return (
+        _normalize_evidence_event_ids(
+            list(
+                _normalize_evidence_event_ids(
+                    existing
+                )
+            )
+            + list(
+                _normalize_evidence_event_ids(
+                    new
+                )
+            )
+        )
+    )
+
+
+def _memory_row_to_dict(
+    row: sqlite3.Row,
+) -> dict:
+
+    data = dict(
+        row
+    )
+
+    data[
+        "evidence_event_ids"
+    ] = (
+        _decode_evidence_event_ids(
+            data.get(
+                "evidence_event_ids_json"
+            )
+        )
+    )
+
+    return data
+
+
 class MemoryStore:
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
@@ -56,18 +180,42 @@ class MemoryStore:
 
         self._initialize_database()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path)
+    @contextmanager
+    def _connect(
+        self,
+    ):
+        connection = (
+            sqlite3.connect(
+                self.db_path
+            )
+        )
 
-        connection.row_factory = sqlite3.Row
+        connection.row_factory = (
+            sqlite3.Row
+        )
 
-        return connection
+        try:
+            yield connection
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+        finally:
+            connection.close()
 
 
-    def _initialize_database(self) -> None:
+    def _initialize_database(
+        self,
+    ) -> None:
+
         with self._connect() as connection:
 
-            # 1. Fresh databases use the new schema.
+            # ------------------------------------------------
+            # Fresh schema
+            # ------------------------------------------------
+
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memories (
@@ -78,6 +226,7 @@ class MemoryStore:
                     importance INTEGER NOT NULL,
                     source TEXT NOT NULL,
                     subject TEXT NOT NULL DEFAULT 'user',
+                    evidence_event_ids_json TEXT NOT NULL DEFAULT '[]',
                     active INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -86,7 +235,10 @@ class MemoryStore:
                 """
             )
 
-            # 2. Older databases may not have subject yet.
+            # ------------------------------------------------
+            # Migration: missing columns
+            # ------------------------------------------------
+
             columns = {
                 row["name"]
                 for row in connection.execute(
@@ -94,40 +246,91 @@ class MemoryStore:
                 ).fetchall()
             }
 
-            if "subject" not in columns:
+            if (
+                "subject"
+                not in columns
+            ):
                 connection.execute(
                     """
                     ALTER TABLE memories
-                    ADD COLUMN subject TEXT NOT NULL DEFAULT 'user'
+                    ADD COLUMN subject
+                    TEXT NOT NULL
+                    DEFAULT 'user'
                     """
                 )
 
-            # 3. Detect old global UNIQUE(normalized_content).
-            unique_indexes = connection.execute(
-                "PRAGMA index_list(memories)"
-            ).fetchall()
+            if (
+                "evidence_event_ids_json"
+                not in columns
+            ):
+                connection.execute(
+                    """
+                    ALTER TABLE memories
+                    ADD COLUMN evidence_event_ids_json
+                    TEXT NOT NULL
+                    DEFAULT '[]'
+                    """
+                )
 
-            has_global_content_unique = False
+            # Refresh after migration.
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(memories)"
+                ).fetchall()
+            }
+
+            # ------------------------------------------------
+            # Detect old global UNIQUE(normalized_content)
+            # ------------------------------------------------
+
+            unique_indexes = (
+                connection.execute(
+                    "PRAGMA index_list(memories)"
+                ).fetchall()
+            )
+
+            has_global_content_unique = (
+                False
+            )
 
             for index in unique_indexes:
+
                 if not index["unique"]:
                     continue
 
-                index_name = index["name"]
+                index_name = (
+                    index["name"]
+                )
 
                 indexed_columns = [
                     row["name"]
-                    for row in connection.execute(
+                    for row
+                    in connection.execute(
                         f'PRAGMA index_info("{index_name}")'
                     ).fetchall()
                 ]
 
-                if indexed_columns == ["normalized_content"]:
-                    has_global_content_unique = True
+                if (
+                    indexed_columns
+                    == [
+                        "normalized_content"
+                    ]
+                ):
+                    has_global_content_unique = (
+                        True
+                    )
+
                     break
 
-            # 4. Rebuild old table if necessary.
-            if has_global_content_unique:
+            # ------------------------------------------------
+            # Old-table rebuild
+            # ------------------------------------------------
+
+            if (
+                has_global_content_unique
+            ):
+
                 connection.execute(
                     """
                     CREATE TABLE memories_new (
@@ -138,6 +341,7 @@ class MemoryStore:
                         importance INTEGER NOT NULL,
                         source TEXT NOT NULL,
                         subject TEXT NOT NULL DEFAULT 'user',
+                        evidence_event_ids_json TEXT NOT NULL DEFAULT '[]',
                         active INTEGER NOT NULL DEFAULT 1,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
@@ -156,6 +360,7 @@ class MemoryStore:
                         importance,
                         source,
                         subject,
+                        evidence_event_ids_json,
                         active,
                         created_at,
                         updated_at
@@ -168,6 +373,7 @@ class MemoryStore:
                         importance,
                         source,
                         subject,
+                        evidence_event_ids_json,
                         active,
                         created_at,
                         updated_at
@@ -175,29 +381,41 @@ class MemoryStore:
                     """
                 )
 
-                connection.execute("DROP TABLE memories")
                 connection.execute(
-                    "ALTER TABLE memories_new RENAME TO memories"
+                    "DROP TABLE memories"
                 )
 
-            # 5. Normal indexes.
+                connection.execute(
+                    """
+                    ALTER TABLE memories_new
+                    RENAME TO memories
+                    """
+                )
+
+            # ------------------------------------------------
+            # Indexes
+            # ------------------------------------------------
+
             connection.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_memories_active
+                CREATE INDEX IF NOT EXISTS
+                idx_memories_active
                 ON memories(active)
                 """
             )
 
             connection.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_memories_category
+                CREATE INDEX IF NOT EXISTS
+                idx_memories_category
                 ON memories(category)
                 """
             )
 
             connection.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_memories_subject
+                CREATE INDEX IF NOT EXISTS
+                idx_memories_subject
                 ON memories(subject)
                 """
             )
@@ -210,54 +428,123 @@ class MemoryStore:
         importance: int = 3,
         source: str = "conversation",
         subject: str = "user",
-) -> dict:
-        content = content.strip()
+        evidence_event_ids=None,
+    ) -> dict:
+
+        content = (
+            content.strip()
+        )
 
         if not content:
-            raise ValueError("Memory content cannot be empty.")
-
-        if len(content) > 2000:
             raise ValueError(
-                "Memory is too long. Store a concise fact instead."
+                "Memory content cannot be empty."
             )
 
-        category = category.strip().lower()
-
-        if category not in VALID_CATEGORIES:
+        if (
+            len(content)
+            > 2000
+        ):
             raise ValueError(
-                f"Invalid memory category: {category}"
+                "Memory is too long. "
+                "Store a concise fact instead."
             )
 
-        subject = subject.strip().lower()
+        category = (
+            category
+            .strip()
+            .lower()
+        )
 
-        if subject not in VALID_SUBJECTS:
+        if (
+            category
+            not in VALID_CATEGORIES
+        ):
             raise ValueError(
-                f"Invalid memory subject: {subject}"
+                "Invalid memory category: "
+                f"{category}"
             )
 
-        importance = max(1, min(int(importance), 5))
+        subject = (
+            subject
+            .strip()
+            .lower()
+        )
 
-        normalized = _normalize(content)
+        if (
+            subject
+            not in VALID_SUBJECTS
+        ):
+            raise ValueError(
+                "Invalid memory subject: "
+                f"{subject}"
+            )
+
+        importance = max(
+            1,
+            min(
+                int(importance),
+                5,
+            ),
+        )
+
+        evidence_event_ids = (
+            _normalize_evidence_event_ids(
+                evidence_event_ids
+            )
+        )
+
+        normalized = (
+            _normalize(
+                content
+            )
+        )
+
         timestamp = _now()
 
         with self._connect() as connection:
-            existing = connection.execute(
-                """
-                SELECT *
-                FROM memories
-                WHERE subject = ?
-                AND normalized_content = ?
-                """,
-                (
-                    subject,
-                    normalized,
-                ),
-            ).fetchone()
+
+            existing = (
+                connection.execute(
+                    """
+                    SELECT *
+                    FROM memories
+                    WHERE subject = ?
+                      AND normalized_content = ?
+                    """,
+                    (
+                        subject,
+                        normalized,
+                    ),
+                )
+                .fetchone()
+            )
+
+            # =================================================
+            # EXISTING MEMORY
+            # =================================================
 
             if existing:
+
                 new_importance = max(
                     importance,
-                    existing["importance"],
+                    existing[
+                        "importance"
+                    ],
+                )
+
+                existing_evidence = (
+                    _decode_evidence_event_ids(
+                        existing[
+                            "evidence_event_ids_json"
+                        ]
+                    )
+                )
+
+                merged_evidence = (
+                    _merge_evidence_event_ids(
+                        existing_evidence,
+                        evidence_event_ids,
+                    )
                 )
 
                 connection.execute(
@@ -269,6 +556,7 @@ class MemoryStore:
                         importance = ?,
                         source = ?,
                         subject = ?,
+                        evidence_event_ids_json = ?,
                         active = 1,
                         updated_at = ?
                     WHERE id = ?
@@ -279,6 +567,9 @@ class MemoryStore:
                         new_importance,
                         source,
                         subject,
+                        _encode_evidence_event_ids(
+                            merged_evidence
+                        ),
                         timestamp,
                         existing["id"],
                     ),
@@ -286,14 +577,30 @@ class MemoryStore:
 
                 return {
                     "status": "existing",
-                    "id": existing["id"],
+                    "id": (
+                        existing["id"]
+                    ),
                     "content": content,
-                    "category": category,
-                    "importance": new_importance,
-                    "subject": subject,
+                    "category":
+                        category,
+                    "importance":
+                        new_importance,
+                    "source":
+                        source,
+                    "subject":
+                        subject,
+                    "evidence_event_ids":
+                        merged_evidence,
                 }
 
-            memory_id = uuid.uuid4().hex[:12]
+            # =================================================
+            # NEW MEMORY
+            # =================================================
+
+            memory_id = (
+                uuid.uuid4()
+                .hex[:12]
+            )
 
             connection.execute(
                 """
@@ -305,11 +612,14 @@ class MemoryStore:
                     importance,
                     source,
                     subject,
+                    evidence_event_ids_json,
                     active,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?
+                )
                 """,
                 (
                     memory_id,
@@ -319,18 +629,38 @@ class MemoryStore:
                     importance,
                     source,
                     subject,
+                    _encode_evidence_event_ids(
+                        evidence_event_ids
+                    ),
                     timestamp,
                     timestamp,
                 ),
             )
 
             return {
-                "status": "created",
-                "id": memory_id,
-                "content": content,
-                "category": category,
-                "importance": importance,
-                "subject": subject,
+                "status":
+                    "created",
+
+                "id":
+                    memory_id,
+
+                "content":
+                    content,
+
+                "category":
+                    category,
+
+                "importance":
+                    importance,
+
+                "source":
+                    source,
+
+                "subject":
+                    subject,
+
+                "evidence_event_ids":
+                    evidence_event_ids,
             }
 
 
@@ -458,8 +788,76 @@ class MemoryStore:
         ]
 
 
-    def forget(self, memory_id: str) -> bool:
+    def get_by_id(
+        self,
+        memory_id: str,
+    ) -> dict | None:
+
         with self._connect() as connection:
+
+            row = connection.execute(
+                """
+                SELECT *
+                FROM memories
+                WHERE id = ?
+                """,
+                (
+                    memory_id,
+                ),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return (
+            _memory_row_to_dict(
+                row
+            )
+        )
+
+
+    def recent_records(
+        self,
+        limit: int = 10,
+    ) -> list[dict]:
+
+        limit = max(
+            1,
+            min(
+                int(limit),
+                100,
+            ),
+        )
+
+        with self._connect() as connection:
+
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM memories
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (
+                    limit,
+                ),
+            ).fetchall()
+
+        return [
+            _memory_row_to_dict(
+                row
+            )
+            for row in rows
+        ]
+
+
+    def forget(
+        self,
+        memory_id: str,
+    ) -> bool:
+
+        with self._connect() as connection:
+
             cursor = connection.execute(
                 """
                 UPDATE memories
@@ -474,7 +872,12 @@ class MemoryStore:
                 ),
             )
 
-        return cursor.rowcount > 0
+            forgotten = (
+                cursor.rowcount
+                > 0
+            )
+
+        return forgotten
 
 
 _STORE = MemoryStore()
@@ -595,6 +998,73 @@ def save_self_memory(
             f"MEMORY_ERROR: "
             f"{type(error).__name__}: {error}"
         )
+
+
+def save_reflection_memory(
+    *,
+    subject: str,
+    content: str,
+    category: str,
+    importance: int,
+    evidence_event_ids: list[str],
+) -> dict:
+    """
+    Internal structured memory-write API used by Reflection.
+
+    Unlike save_memory/save_self_memory, this function is not
+    exposed to the conversational model as a tool.
+
+    evidence_event_ids describe the observed experience window
+    used when forming this memory.
+    """
+
+    subject = (
+        str(subject)
+        .strip()
+        .lower()
+    )
+
+    if subject not in {
+        "user",
+        "aperture",
+    }:
+        raise ValueError(
+            "Reflection memory subject "
+            "must be 'user' or 'aperture'."
+        )
+
+    return _STORE.remember(
+        content=content,
+        category=category,
+        importance=importance,
+        source="reflection",
+        subject=subject,
+        evidence_event_ids=(
+            evidence_event_ids
+        ),
+    )
+
+
+def get_memory_record(
+    memory_id: str,
+) -> dict | None:
+
+    return (
+        _STORE.get_by_id(
+            memory_id
+        )
+    )
+
+
+def get_recent_memory_records(
+    limit: int = 10,
+) -> list[dict]:
+
+    return (
+        _STORE.recent_records(
+            limit=limit
+        )
+    )
 
 
 def build_relevant_memory_context(

@@ -14,7 +14,6 @@ from experience import (
     record_assistant_message,
     record_tool_call,
     record_tool_result,
-    record_reflection_result,
     record_self_state_update,
     record_turn_stopped,
 )
@@ -373,6 +372,7 @@ def finalize_answer(
             memory_operation_used=(
                 memory_operation_used
             ),
+            turn_id=turn_id,
         )
     )
 
@@ -380,11 +380,6 @@ def finalize_answer(
         print(
             f"\n[REFLECTION] "
             f"{reflection_result}"
-        )
-
-        record_reflection_result(
-            turn_id,
-            reflection_result,
         )
 
     # --------------------------------------------------------
