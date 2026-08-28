@@ -9,6 +9,9 @@ venv/
 # Environment variables
 .env
 
-# APERTURE local memory
+# APERTURE local state
 data/aperture_memory.db
-data/aperture_memory.db-*git 
+data/aperture_memory.db-*
+
+data/aperture_experience.db
+data/aperture_experience.db-*

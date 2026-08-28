@@ -1,10 +1,22 @@
 from ollama import chat as ollama_chat
+
 from persona import build_persona_context
 from reflection import maybe_reflect
 
 from self_state import (
     build_self_state_context,
     maybe_update_self_state,
+    get_self_state,
+)
+
+from experience import (
+    start_turn,
+    record_assistant_message,
+    record_tool_call,
+    record_tool_result,
+    record_reflection_result,
+    record_self_state_update,
+    record_turn_stopped,
 )
 
 from tools import (
@@ -27,9 +39,14 @@ from memory import (
     build_relevant_memory_context,
 )
 
+
 MODEL = "qwen3:8b"
 MAX_STEPS = 8
 
+
+# ============================================================
+# TOOL AVAILABILITY
+# ============================================================
 
 BASE_TOOLS = [
     list_directory,
@@ -62,7 +79,6 @@ def should_expose_self_memory_tool(
     if not text:
         return False
 
-    # Recall questions are not requests to create memory.
     recall_only = (
         "do you remember ",
         "did you remember ",
@@ -119,8 +135,6 @@ def should_expose_self_memory_tool(
     ):
         return True
 
-    # Allows forms such as:
-    # "Remember that preference about yourself."
     if (
         "about yourself" in text
         and any(
@@ -136,7 +150,6 @@ def should_expose_self_memory_tool(
     ):
         return True
 
-    # Slightly broader Turkish fallback.
     if (
         any(
             marker in text
@@ -178,16 +191,34 @@ def get_tools_for_goal(
 
 
 TOOL_MAP = {
-    "list_directory": list_directory,
-    "read_file": read_file,
-    "write_file": write_file,
-    "open_app": open_app,
-    "run_terminal": run_terminal,
-    "save_memory": save_memory,
-    "search_memory": search_memory,
-    "forget_memory": forget_memory,
-    "save_self_memory": save_self_memory,
+    "list_directory":
+        list_directory,
+
+    "read_file":
+        read_file,
+
+    "write_file":
+        write_file,
+
+    "open_app":
+        open_app,
+
+    "run_terminal":
+        run_terminal,
+
+    "save_memory":
+        save_memory,
+
+    "search_memory":
+        search_memory,
+
+    "forget_memory":
+        forget_memory,
+
+    "save_self_memory":
+        save_self_memory,
 }
+
 
 NON_ACTION_TOOLS = {
     "save_memory",
@@ -197,12 +228,31 @@ NON_ACTION_TOOLS = {
 }
 
 
-def get_current_goal(messages):
-    for message in reversed(messages):
-        if isinstance(message, dict) and message.get("role") == "user":
-            return message.get("content", "")
+# ============================================================
+# GOAL / CONTEXT
+# ============================================================
+
+def get_current_goal(
+    messages,
+):
+    for message in reversed(
+        messages
+    ):
+        if (
+            isinstance(
+                message,
+                dict,
+            )
+            and message.get("role")
+            == "user"
+        ):
+            return message.get(
+                "content",
+                "",
+            )
 
     return ""
+
 
 def inject_runtime_context(
     messages,
@@ -276,19 +326,23 @@ def inject_runtime_context(
             0,
             {
                 "role": "system",
-                "content": (
-                    runtime_context
-                ),
+                "content":
+                    runtime_context,
             },
         )
 
     return runtime_messages
 
 
+# ============================================================
+# FINAL ANSWER / COGNITIVE POST-PROCESSING
+# ============================================================
+
 def finalize_answer(
     messages,
     answer: str,
     *,
+    turn_id: str,
     used_action_tool: bool,
     memory_operation_used: bool,
 ):
@@ -296,6 +350,19 @@ def finalize_answer(
         "role": "assistant",
         "content": answer,
     })
+
+    # --------------------------------------------------------
+    # OBSERVED EXPERIENCE
+    # --------------------------------------------------------
+
+    record_assistant_message(
+        turn_id,
+        answer,
+    )
+
+    # --------------------------------------------------------
+    # REFLECTION
+    # --------------------------------------------------------
 
     reflection_result = (
         maybe_reflect(
@@ -315,6 +382,19 @@ def finalize_answer(
             f"{reflection_result}"
         )
 
+        record_reflection_result(
+            turn_id,
+            reflection_result,
+        )
+
+    # --------------------------------------------------------
+    # DYNAMIC SELF
+    # --------------------------------------------------------
+
+    previous_self_state = (
+        get_self_state()
+    )
+
     self_state_result = (
         maybe_update_self_state(
             messages,
@@ -328,17 +408,69 @@ def finalize_answer(
     )
 
     if self_state_result is not None:
+
         print(
             f"\n[SELF_STATE] "
             f"{self_state_result}"
         )
 
+        record_self_state_update(
+            turn_id,
+            previous_state=(
+                previous_self_state
+            ),
+            updated_state=(
+                self_state_result
+            ),
+        )
+
     return answer
 
 
-def chat(messages):
+# ============================================================
+# RESULT STATUS
+# ============================================================
+
+def _tool_result_status(
+    result,
+) -> str:
+
+    text = str(
+        result
+    )
+
+    error_prefixes = (
+        "TOOL_ERROR",
+        "READ_ERROR",
+        "WRITE_ERROR",
+        "MEMORY_ERROR",
+    )
+
+    if text.startswith(
+        error_prefixes
+    ):
+        return "error"
+
+    return "ok"
+
+
+# ============================================================
+# AGENT LOOP
+# ============================================================
+
+def chat(
+    messages,
+):
     goal = get_current_goal(
         messages
+    )
+
+    # One user -> APERTURE interaction
+    # receives one stable turn ID.
+    turn_id = (
+        start_turn(
+            goal
+        )
     )
 
     available_tools = (
@@ -364,14 +496,19 @@ def chat(messages):
     )
 
     observations = []
+
     used_action_tool = False
     memory_operation_used = False
 
-    for step in range(MAX_STEPS):
+    for step in range(
+        MAX_STEPS
+    ):
 
         response = ollama_chat(
             model=MODEL,
-            messages=working_messages,
+            messages=(
+                working_messages
+            ),
             tools=available_tools,
             think=False,
         )
@@ -380,10 +517,15 @@ def chat(messages):
             response.message
         )
 
-        # --------------------------------
+        # ====================================================
         # MODEL TOOL ÇAĞIRMADI
-        # --------------------------------
-        if not response.message.tool_calls:
+        # ====================================================
+
+        if (
+            not response
+            .message
+            .tool_calls
+        ):
 
             answer = (
                 response.message.content
@@ -392,9 +534,11 @@ def chat(messages):
 
             # Normal sohbet
             if not used_action_tool:
+
                 return finalize_answer(
                     messages,
                     answer,
+                    turn_id=turn_id,
                     used_action_tool=(
                         used_action_tool
                     ),
@@ -405,20 +549,24 @@ def chat(messages):
 
             # Tool kullanıldıysa görev
             # gerçekten tamamlandı mı?
-            complete = is_task_complete(
-                goal=goal,
-                answer=answer,
-                observations=(
-                    "\n\n".join(
-                        observations
-                    )
-                ),
+            complete = (
+                is_task_complete(
+                    goal=goal,
+                    answer=answer,
+                    observations=(
+                        "\n\n".join(
+                            observations
+                        )
+                    ),
+                )
             )
 
             if complete:
+
                 return finalize_answer(
                     messages,
                     answer,
+                    turn_id=turn_id,
                     used_action_tool=(
                         used_action_tool
                     ),
@@ -457,34 +605,66 @@ Rules:
 
             continue
 
-        # --------------------------------
+        # ====================================================
         # MODEL TOOL ÇAĞIRDI
-        # --------------------------------
+        # ====================================================
+
         for call in (
-            response.message.tool_calls
+            response
+            .message
+            .tool_calls
         ):
 
             tool_name = (
-                call.function.name
+                call
+                .function
+                .name
             )
 
             arguments = (
-                call.function.arguments
+                call
+                .function
+                .arguments
             )
 
-            # Defense in depth:
-            # save_self_memory is unavailable unless
-            # Arda explicitly requested self-memory.
+            # -----------------------------------------------
+            # EXPERIENCE: TOOL CALL
+            # -----------------------------------------------
+
+            record_tool_call(
+                turn_id,
+                tool_name=tool_name,
+                arguments=(
+                    arguments
+                    if isinstance(
+                        arguments,
+                        dict,
+                    )
+                    else {
+                        "raw":
+                            str(arguments)
+                    }
+                ),
+            )
+
+            # -----------------------------------------------
+            # SELF MEMORY DEFENSE
+            # -----------------------------------------------
+
             if (
                 tool_name
                 == "save_self_memory"
-                and not self_memory_tool_allowed
+                and not
+                self_memory_tool_allowed
             ):
+
                 result = (
-                    "TOOL_ERROR: save_self_memory "
-                    "is only available when Arda "
-                    "explicitly asks APERTURE to "
-                    "remember something about itself."
+                    "TOOL_ERROR: "
+                    "save_self_memory is only "
+                    "available when Arda "
+                    "explicitly asks APERTURE "
+                    "to remember something "
+                    "about itself."
                 )
 
                 print(
@@ -493,20 +673,35 @@ Rules:
                 )
 
                 print(
-                    f"[RESULT] {result}"
+                    f"[RESULT] "
+                    f"{result}"
+                )
+
+                record_tool_result(
+                    turn_id,
+                    tool_name=tool_name,
+                    result=result,
+                    status="blocked",
                 )
 
                 working_messages.append({
                     "role": "tool",
-                    "tool_name": tool_name,
-                    "content": result,
+                    "tool_name":
+                        tool_name,
+                    "content":
+                        result,
                 })
 
                 continue
 
+            # -----------------------------------------------
+            # TRACK ACTION / MEMORY OPERATIONS
+            # -----------------------------------------------
+
             if (
                 tool_name
-                not in NON_ACTION_TOOLS
+                not in
+                NON_ACTION_TOOLS
             ):
                 used_action_tool = True
 
@@ -517,20 +712,34 @@ Rules:
             }:
                 memory_operation_used = True
 
-            if tool_name not in TOOL_MAP:
+            # -----------------------------------------------
+            # UNKNOWN TOOL
+            # -----------------------------------------------
+
+            if (
+                tool_name
+                not in TOOL_MAP
+            ):
                 result = (
-                    f"TOOL_ERROR: "
-                    f"Unknown tool: "
+                    "TOOL_ERROR: "
+                    "Unknown tool: "
                     f"{tool_name}"
                 )
 
+                result_status = (
+                    "error"
+                )
+
             else:
+
                 target = (
                     arguments.get("path")
                     or arguments.get(
                         "app_name"
                     )
-                    or arguments.get("cwd")
+                    or arguments.get(
+                        "cwd"
+                    )
                     or arguments.get(
                         "command"
                     )
@@ -546,10 +755,15 @@ Rules:
                     f"{target}"
                 )
 
+                # -------------------------------------------
+                # PERMISSION
+                # -------------------------------------------
+
                 if check_permission(
                     tool_name,
                     target,
                 ):
+
                     try:
                         result = (
                             TOOL_MAP[
@@ -559,10 +773,18 @@ Rules:
                             )
                         )
 
+                        result_status = (
+                            _tool_result_status(
+                                result
+                            )
+                        )
+
                         if (
                             tool_name
                             == "read_file"
-                            and not result.startswith(
+                            and not
+                            str(result)
+                            .startswith(
                                 "READ_ERROR"
                             )
                         ):
@@ -578,42 +800,71 @@ Rules:
                             )
 
                     except Exception as e:
+
                         result = (
                             "TOOL_ERROR: "
                             f"{type(e).__name__}: "
                             f"{e}"
                         )
 
+                        result_status = (
+                            "error"
+                        )
+
                 else:
+
                     result = (
                         "Permission denied "
                         "by user."
                     )
 
-            # Şimdilik debug için gösteriyoruz
+                    result_status = (
+                        "permission_denied"
+                    )
+
+            # -----------------------------------------------
+            # DEBUG OUTPUT
+            # -----------------------------------------------
+
             print(
                 f"[RESULT] "
-                f"{result[:500]}"
+                f"{str(result)[:500]}"
+            )
+
+            # -----------------------------------------------
+            # EXPERIENCE: TOOL RESULT
+            # -----------------------------------------------
+
+            record_tool_result(
+                turn_id,
+                tool_name=tool_name,
+                result=result,
+                status=result_status,
             )
 
             # Tool sonucunu sadece
-            # çalışma geçmişine ekle
+            # çalışma geçmişine ekle.
             working_messages.append({
                 "role": "tool",
-                "tool_name": tool_name,
-                "content": result,
+                "tool_name":
+                    tool_name,
+                "content":
+                    result,
             })
 
-    return (
+    # ========================================================
+    # MAX STEP STOP
+    # ========================================================
+
+    stop_reason = (
         "Task stopped because maximum "
         "agent steps were reached."
     )
 
+    record_turn_stopped(
+        turn_id,
+        reason=stop_reason,
+    )
 
-
-
-
-
-
-
+    return stop_reason
 

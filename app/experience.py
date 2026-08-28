@@ -1,0 +1,933 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+DATA_DIR = (
+    Path(__file__)
+    .resolve()
+    .parent
+    .parent
+    / "data"
+)
+
+DB_PATH = (
+    DATA_DIR
+    / "aperture_experience.db"
+)
+
+
+VALID_EVENT_CLASSES = {
+    "observed",
+    "derived",
+    "system",
+}
+
+
+MAX_EVENT_CONTENT_LENGTH = 100_000
+MAX_METADATA_STRING_LENGTH = 20_000
+
+
+SENSITIVE_METADATA_KEYS = {
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+}
+
+
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
+def _now() -> str:
+    return (
+        datetime
+        .now(timezone.utc)
+        .isoformat()
+    )
+
+
+def _new_id(
+    prefix: str,
+) -> str:
+    return (
+        f"{prefix}_"
+        f"{uuid.uuid4().hex[:12]}"
+    )
+
+
+def _safe_content(
+    content: Any,
+) -> str:
+    if content is None:
+        return ""
+
+    text = str(content)
+
+    if (
+        len(text)
+        <= MAX_EVENT_CONTENT_LENGTH
+    ):
+        return text
+
+    removed = (
+        len(text)
+        - MAX_EVENT_CONTENT_LENGTH
+    )
+
+    return (
+        text[
+            :MAX_EVENT_CONTENT_LENGTH
+        ]
+        + "\n\n"
+        + (
+            "[EXPERIENCE_TRUNCATED: "
+            f"{removed} characters omitted]"
+        )
+    )
+
+
+def _is_sensitive_key(
+    key: str,
+) -> bool:
+    normalized = (
+        str(key)
+        .casefold()
+        .replace("-", "_")
+    )
+
+    return any(
+        sensitive
+        in normalized
+        for sensitive
+        in SENSITIVE_METADATA_KEYS
+    )
+
+
+def _sanitize_metadata_value(
+    value: Any,
+    *,
+    key: str | None = None,
+) -> Any:
+
+    if (
+        key is not None
+        and _is_sensitive_key(key)
+    ):
+        return "[REDACTED]"
+
+    if value is None:
+        return None
+
+    if isinstance(
+        value,
+        (bool, int, float),
+    ):
+        return value
+
+    if isinstance(
+        value,
+        str,
+    ):
+        if (
+            len(value)
+            <= MAX_METADATA_STRING_LENGTH
+        ):
+            return value
+
+        return (
+            value[
+                :MAX_METADATA_STRING_LENGTH
+            ]
+            + (
+                "\n[METADATA_TRUNCATED]"
+            )
+        )
+
+    if isinstance(
+        value,
+        dict,
+    ):
+        return {
+            str(item_key):
+                _sanitize_metadata_value(
+                    item_value,
+                    key=str(item_key),
+                )
+            for (
+                item_key,
+                item_value,
+            ) in value.items()
+        }
+
+    if isinstance(
+        value,
+        (list, tuple, set),
+    ):
+        return [
+            _sanitize_metadata_value(
+                item
+            )
+            for item in value
+        ]
+
+    return _sanitize_metadata_value(
+        str(value)
+    )
+
+
+def _encode_metadata(
+    metadata: dict | None,
+) -> str:
+    cleaned = (
+        _sanitize_metadata_value(
+            metadata or {}
+        )
+    )
+
+    return json.dumps(
+        cleaned,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _decode_metadata(
+    raw: str,
+) -> dict:
+    try:
+        data = json.loads(
+            raw or "{}"
+        )
+
+        if isinstance(
+            data,
+            dict,
+        ):
+            return data
+
+    except Exception:
+        pass
+
+    return {}
+
+
+# ============================================================
+# STORE
+# ============================================================
+
+class ExperienceStore:
+
+    def __init__(
+        self,
+        db_path: Path = DB_PATH,
+    ):
+        self.db_path = db_path
+
+        self.db_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        self._initialize_database()
+
+
+    def _connect(
+        self,
+    ) -> sqlite3.Connection:
+
+        connection = (
+            sqlite3.connect(
+                self.db_path
+            )
+        )
+
+        connection.row_factory = (
+            sqlite3.Row
+        )
+
+        connection.execute(
+            "PRAGMA foreign_keys = ON"
+        )
+
+        return connection
+
+
+    def _initialize_database(
+        self,
+    ) -> None:
+
+        with self._connect() as connection:
+
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS episodes (
+                    id TEXT PRIMARY KEY,
+                    started_at TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL
+                )
+                """
+            )
+
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS events (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id TEXT NOT NULL UNIQUE,
+                    episode_id TEXT NOT NULL,
+                    turn_id TEXT,
+                    event_class TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    actor TEXT,
+                    content TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+
+                    FOREIGN KEY (episode_id)
+                    REFERENCES episodes(id)
+                )
+                """
+            )
+
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_experience_events_episode
+                ON events(
+                    episode_id,
+                    seq
+                )
+                """
+            )
+
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_experience_events_turn
+                ON events(
+                    turn_id,
+                    seq
+                )
+                """
+            )
+
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_experience_events_type
+                ON events(
+                    event_type
+                )
+                """
+            )
+
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_experience_events_class
+                ON events(
+                    event_class
+                )
+                """
+            )
+
+
+    def create_episode(
+        self,
+        *,
+        metadata: dict | None = None,
+    ) -> str:
+
+        episode_id = (
+            _new_id("ep")
+        )
+
+        with self._connect() as connection:
+
+            connection.execute(
+                """
+                INSERT INTO episodes (
+                    id,
+                    started_at,
+                    metadata_json
+                )
+                VALUES (?, ?, ?)
+                """,
+                (
+                    episode_id,
+                    _now(),
+                    _encode_metadata(
+                        metadata
+                    ),
+                ),
+            )
+
+        return episode_id
+
+
+    def append_event(
+        self,
+        *,
+        episode_id: str,
+        event_type: str,
+        event_class: str,
+        content: Any = "",
+        turn_id: str | None = None,
+        actor: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+
+        event_type = (
+            str(event_type)
+            .strip()
+        )
+
+        event_class = (
+            str(event_class)
+            .strip()
+            .lower()
+        )
+
+        if not event_type:
+            raise ValueError(
+                "event_type cannot be empty."
+            )
+
+        if (
+            event_class
+            not in VALID_EVENT_CLASSES
+        ):
+            raise ValueError(
+                "Invalid event_class: "
+                f"{event_class}"
+            )
+
+        event_id = (
+            _new_id("evt")
+        )
+
+        timestamp = _now()
+
+        with self._connect() as connection:
+
+            existing_episode = (
+                connection.execute(
+                    """
+                    SELECT id
+                    FROM episodes
+                    WHERE id = ?
+                    """,
+                    (episode_id,),
+                )
+                .fetchone()
+            )
+
+            if existing_episode is None:
+                raise ValueError(
+                    "Unknown episode_id: "
+                    f"{episode_id}"
+                )
+
+            cursor = connection.execute(
+                """
+                INSERT INTO events (
+                    id,
+                    episode_id,
+                    turn_id,
+                    event_class,
+                    event_type,
+                    actor,
+                    content,
+                    metadata_json,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    episode_id,
+                    turn_id,
+                    event_class,
+                    event_type,
+                    actor,
+                    _safe_content(
+                        content
+                    ),
+                    _encode_metadata(
+                        metadata
+                    ),
+                    timestamp,
+                ),
+            )
+
+            seq = (
+                cursor.lastrowid
+            )
+
+        return {
+            "seq": seq,
+            "id": event_id,
+            "episode_id": episode_id,
+            "turn_id": turn_id,
+            "event_class": event_class,
+            "event_type": event_type,
+            "actor": actor,
+            "created_at": timestamp,
+        }
+
+
+    def latest_episode_id(
+        self,
+    ) -> str | None:
+
+        with self._connect() as connection:
+
+            row = connection.execute(
+                """
+                SELECT id
+                FROM episodes
+                ORDER BY started_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return str(
+            row["id"]
+        )
+
+
+    def episode_events(
+        self,
+        episode_id: str,
+        *,
+        limit: int = 500,
+    ) -> list[dict]:
+
+        limit = max(
+            1,
+            min(
+                int(limit),
+                5000,
+            ),
+        )
+
+        with self._connect() as connection:
+
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM events
+                WHERE episode_id = ?
+                ORDER BY seq ASC
+                LIMIT ?
+                """,
+                (
+                    episode_id,
+                    limit,
+                ),
+            ).fetchall()
+
+        return [
+            _row_to_event(row)
+            for row in rows
+        ]
+
+
+    def turn_events(
+        self,
+        turn_id: str,
+    ) -> list[dict]:
+
+        with self._connect() as connection:
+
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM events
+                WHERE turn_id = ?
+                ORDER BY seq ASC
+                """,
+                (turn_id,),
+            ).fetchall()
+
+        return [
+            _row_to_event(row)
+            for row in rows
+        ]
+
+
+def _row_to_event(
+    row: sqlite3.Row,
+) -> dict:
+
+    return {
+        "seq": row["seq"],
+        "id": row["id"],
+        "episode_id": (
+            row["episode_id"]
+        ),
+        "turn_id": row["turn_id"],
+        "event_class": (
+            row["event_class"]
+        ),
+        "event_type": (
+            row["event_type"]
+        ),
+        "actor": row["actor"],
+        "content": row["content"],
+        "metadata": (
+            _decode_metadata(
+                row["metadata_json"]
+            )
+        ),
+        "created_at": (
+            row["created_at"]
+        ),
+    }
+
+
+_STORE = ExperienceStore()
+
+_CURRENT_EPISODE_ID: (
+    str | None
+) = None
+
+
+# ============================================================
+# EPISODE LIFECYCLE
+# ============================================================
+
+def start_episode(
+    *,
+    metadata: dict | None = None,
+) -> str:
+
+    global _CURRENT_EPISODE_ID
+
+    if (
+        _CURRENT_EPISODE_ID
+        is not None
+    ):
+        return _CURRENT_EPISODE_ID
+
+    episode_id = (
+        _STORE.create_episode(
+            metadata=metadata,
+        )
+    )
+
+    _CURRENT_EPISODE_ID = (
+        episode_id
+    )
+
+    record_event(
+        event_type=(
+            "episode_start"
+        ),
+        event_class="system",
+        actor="system",
+        metadata=metadata,
+    )
+
+    return episode_id
+
+
+def ensure_episode() -> str:
+
+    if (
+        _CURRENT_EPISODE_ID
+        is None
+    ):
+        return start_episode(
+            metadata={
+                "started_by":
+                    "lazy_initialization",
+            }
+        )
+
+    return _CURRENT_EPISODE_ID
+
+
+def get_current_episode_id(
+    *,
+    create_if_missing: bool = True,
+) -> str | None:
+
+    if (
+        _CURRENT_EPISODE_ID
+        is not None
+    ):
+        return _CURRENT_EPISODE_ID
+
+    if create_if_missing:
+        return ensure_episode()
+
+    return None
+
+
+def end_episode(
+    *,
+    reason: str = "session_end",
+) -> str | None:
+
+    global _CURRENT_EPISODE_ID
+
+    episode_id = (
+        _CURRENT_EPISODE_ID
+    )
+
+    if episode_id is None:
+        return None
+
+    record_event(
+        event_type=(
+            "episode_end"
+        ),
+        event_class="system",
+        actor="system",
+        content=reason,
+        metadata={
+            "reason": reason,
+        },
+    )
+
+    _CURRENT_EPISODE_ID = None
+
+    return episode_id
+
+
+# ============================================================
+# GENERIC EVENT API
+# ============================================================
+
+def record_event(
+    *,
+    event_type: str,
+    event_class: str,
+    content: Any = "",
+    turn_id: str | None = None,
+    actor: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+
+    episode_id = (
+        ensure_episode()
+    )
+
+    return _STORE.append_event(
+        episode_id=episode_id,
+        turn_id=turn_id,
+        event_type=event_type,
+        event_class=event_class,
+        actor=actor,
+        content=content,
+        metadata=metadata,
+    )
+
+
+# ============================================================
+# TURN / OBSERVED EXPERIENCE
+# ============================================================
+
+def start_turn(
+    user_message: str,
+) -> str:
+
+    turn_id = (
+        _new_id("turn")
+    )
+
+    record_event(
+        turn_id=turn_id,
+        event_type="user_message",
+        event_class="observed",
+        actor="arda",
+        content=user_message,
+    )
+
+    return turn_id
+
+
+def record_assistant_message(
+    turn_id: str,
+    content: str,
+) -> dict:
+
+    return record_event(
+        turn_id=turn_id,
+        event_type=(
+            "assistant_message"
+        ),
+        event_class="observed",
+        actor="aperture",
+        content=content,
+    )
+
+
+def record_tool_call(
+    turn_id: str,
+    *,
+    tool_name: str,
+    arguments: dict | None = None,
+) -> dict:
+
+    return record_event(
+        turn_id=turn_id,
+        event_type="tool_call",
+        event_class="observed",
+        actor="aperture",
+        content=tool_name,
+        metadata={
+            "tool_name": tool_name,
+            "arguments":
+                arguments or {},
+        },
+    )
+
+
+def record_tool_result(
+    turn_id: str,
+    *,
+    tool_name: str,
+    result: Any,
+    status: str = "ok",
+) -> dict:
+
+    return record_event(
+        turn_id=turn_id,
+        event_type="tool_result",
+        event_class="observed",
+        actor="tool",
+        content=result,
+        metadata={
+            "tool_name": tool_name,
+            "status": status,
+        },
+    )
+
+
+# ============================================================
+# DERIVED COGNITIVE EVENTS
+# ============================================================
+
+def record_reflection_result(
+    turn_id: str,
+    result: str,
+) -> dict:
+
+    no_memory = (
+        result.strip()
+        == "NO_MEMORY"
+    )
+
+    return record_event(
+        turn_id=turn_id,
+        event_type=(
+            "reflection_result"
+        ),
+        event_class="derived",
+        actor="reflection",
+        content=result,
+        metadata={
+            "memory_created":
+                not no_memory,
+        },
+    )
+
+
+def record_self_state_update(
+    turn_id: str,
+    *,
+    previous_state: dict,
+    updated_state: dict,
+) -> dict:
+
+    return record_event(
+        turn_id=turn_id,
+        event_type=(
+            "self_state_update"
+        ),
+        event_class="derived",
+        actor="self_state",
+        content=json.dumps(
+            updated_state,
+            ensure_ascii=False,
+        ),
+        metadata={
+            "previous_state":
+                previous_state,
+            "updated_state":
+                updated_state,
+        },
+    )
+
+
+def record_turn_stopped(
+    turn_id: str,
+    *,
+    reason: str,
+) -> dict:
+
+    return record_event(
+        turn_id=turn_id,
+        event_type=(
+            "turn_stopped"
+        ),
+        event_class="system",
+        actor="system",
+        content=reason,
+        metadata={
+            "reason": reason,
+        },
+    )
+
+
+# ============================================================
+# DEBUG / READ API
+# ============================================================
+
+def get_latest_episode_id(
+) -> str | None:
+
+    return (
+        _STORE.latest_episode_id()
+    )
+
+
+def get_episode_events(
+    episode_id: str,
+    *,
+    limit: int = 500,
+) -> list[dict]:
+
+    return (
+        _STORE.episode_events(
+            episode_id,
+            limit=limit,
+        )
+    )
+
+
+def get_turn_events(
+    turn_id: str,
+) -> list[dict]:
+
+    return (
+        _STORE.turn_events(
+            turn_id
+        )
+    )

@@ -1,5 +1,11 @@
 from llm import chat
 
+from experience import (
+    start_episode,
+    end_episode,
+)
+
+
 messages = [
 {
     "role": "system",
@@ -47,20 +53,74 @@ Memory rules:
 }
 ]
 
-while True:
-    user_input = input("You > ")
 
-    if user_input.lower() in {"exit", "quit"}:
-        break
+start_episode(
+    metadata={
+        "interface": "cli",
+        "model": "qwen3:8b",
+    }
+)
 
-    messages.append({
-        "role": "user",
-        "content": user_input
-    })
 
-    print("\nAPERTURE > ", end="", flush=True)
+exit_reason = (
+    "process_end"
+)
 
-    answer = chat(messages)
 
-    print(answer)
-    print()
+try:
+
+    while True:
+
+        user_input = input(
+            "You > "
+        )
+
+        if (
+            user_input
+            .lower()
+            in {
+                "exit",
+                "quit",
+            }
+        ):
+            exit_reason = (
+                "user_exit"
+            )
+
+            break
+
+        messages.append({
+            "role": "user",
+            "content": user_input,
+        })
+
+        print(
+            "\nAPERTURE > ",
+            end="",
+            flush=True,
+        )
+
+        answer = chat(
+            messages
+        )
+
+        print(answer)
+        print()
+
+
+except KeyboardInterrupt:
+
+    exit_reason = (
+        "keyboard_interrupt"
+    )
+
+    print(
+        "\n\nAPERTURE stopped."
+    )
+
+
+finally:
+
+    end_episode(
+        reason=exit_reason,
+    )
