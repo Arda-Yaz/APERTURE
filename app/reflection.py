@@ -425,6 +425,35 @@ the durable information unambiguous.
 Do not invent a memory merely to fill an empty slot.
 
 
+MULTI-MESSAGE RECOVERY
+
+When USER extraction returned null, inspect Arda's messages
+individually before deciding that no user-memory exists.
+
+Questions about APERTURE, hypotheticals, and second-person
+statements should be ignored rather than allowing them to
+hide a separate durable statement about Arda.
+
+Example:
+
+ARDA asks two questions about APERTURE,
+then says:
+
+"I usually prefer working late at night."
+
+Even if USER extraction returned null,
+the validator may recover:
+
+{
+  "content": "Arda usually prefers working late at night.",
+  "category": "preference",
+  "importance": 3
+}
+
+Recovery must still be directly supported by Arda's words.
+Do not infer information merely to fill an empty slot.
+
+
 SEMANTIC FIDELITY
 
 Preserve exact semantic direction.
