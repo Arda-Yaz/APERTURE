@@ -1121,7 +1121,6 @@ def record_reflection_analysis(
         },
     )
 
-
 def record_memory_formation(
     turn_id: str,
     *,
@@ -1144,7 +1143,9 @@ def record_memory_formation(
         ),
         metadata={
             "memory_id":
-                memory_record.get("id"),
+                memory_record.get(
+                    "id"
+                ),
 
             "subject":
                 memory_record.get(
@@ -1170,6 +1171,52 @@ def record_memory_formation(
                 memory_record.get(
                     "source"
                 ),
+
+            "evidence_event_ids":
+                evidence_event_ids,
+
+            "supersedes_memory_id":
+                memory_record.get(
+                    "supersedes_memory_id"
+                ),
+
+            "superseded_memory_id":
+                memory_record.get(
+                    "superseded_memory_id"
+                ),
+        },
+    )
+
+
+def record_memory_supersession(
+    turn_id: str,
+    *,
+    old_memory_id: str,
+    new_memory_id: str,
+    subject: str,
+    evidence_event_ids: list[str],
+) -> dict:
+
+    return record_event(
+        turn_id=turn_id,
+        event_type=(
+            "memory_superseded"
+        ),
+        event_class="derived",
+        actor="reflection",
+        content=(
+            f"{old_memory_id} "
+            f"-> {new_memory_id}"
+        ),
+        metadata={
+            "old_memory_id":
+                old_memory_id,
+
+            "new_memory_id":
+                new_memory_id,
+
+            "subject":
+                subject,
 
             "evidence_event_ids":
                 evidence_event_ids,

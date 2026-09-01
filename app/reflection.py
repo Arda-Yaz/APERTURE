@@ -5,7 +5,7 @@ import json
 from ollama import chat as ollama_chat
 
 from memory import (
-    build_memory_context,
+    build_memory_validation_context,
     save_reflection_memory,
 )
 
@@ -13,6 +13,7 @@ from experience import (
     get_recent_observed_message_events,
     record_reflection_analysis,
     record_memory_formation,
+    record_memory_supersession,
 )
 
 
@@ -467,34 +468,80 @@ Do not invert or alter:
 - rejected actions
 - stated intentions
 
-
 EXISTING MEMORY
 
-Use existing memory only to check continuity and duplication.
+You receive a CURRENT_MEMORY_INDEX.
+
+Each current memory has a stable memory id.
+
+Use existing memory only to:
+- check continuity
+- detect duplicates
+- detect genuine temporal updates
 
 Do not treat existing memory as evidence that the current
 conversation said something it did not say.
 
-If an equivalent memory already exists and the current
-conversation does not meaningfully update it,
+
+DUPLICATES
+
+If an equivalent current memory already exists and the
+current conversation does not meaningfully update it,
 return null for that slot.
 
+Do not supersede a memory merely to rewrite it with slightly
+different wording.
 
-FINAL FORM
 
-Final memory content should be a concise natural summary.
+TEMPORAL UPDATE / SUPERSESSION
 
-Prefer one sentence.
+Sometimes the new conversation establishes that a previously
+current memory is no longer current.
 
-Do not copy an entire conversational response when the same
-meaning can be represented more concisely.
+Examples:
 
-Use importance conservatively.
+old:
+"Arda prefers working late at night."
 
-Most memories should be 2 or 3.
-Use 4 only for information with strong future relevance.
-Use 5 only for foundational information.
+new:
+"Arda now prefers working early in the morning."
 
+old:
+"I currently prefer Python."
+
+new:
+"I no longer prefer Python; I currently prefer Java."
+
+When the new memory CLEARLY replaces, contradicts, or updates
+one current memory:
+
+- return the new memory
+- set "supersedes_memory_id" to the exact id of the old memory
+
+Only use an id that exists in CURRENT_MEMORY_INDEX.
+
+The superseded memory must describe the SAME subject.
+
+Never supersede:
+- user memory with APERTURE self-memory
+- APERTURE self-memory with user memory
+- unrelated facts
+- a memory merely because the new wording is more detailed
+- a memory when change is ambiguous
+
+If the new information can coexist with the old memory,
+it is NOT supersession.
+
+If uncertain, do not supply supersedes_memory_id.
+
+Supersession means:
+
+"The old memory was valid history, but it is no longer
+the best representation of the current state."
+
+It does NOT mean:
+
+"The old memory was false or should be erased."
 
 Return ONLY this structure:
 
@@ -503,13 +550,19 @@ Return ONLY this structure:
   "self_memory": null
 }
 
-Replace either null only when justified.
+When a memory is justified, use:
 
-Allowed USER categories:
-profile, preference, goal, project, fact, opinion, belief
+{
+  "content": "concise one-sentence summary",
+  "category": "preference",
+  "importance": 3,
+  "supersedes_memory_id": null
+}
 
-Allowed SELF categories:
-preference, opinion, relationship, decision, fact
+Set supersedes_memory_id to a CURRENT_MEMORY_INDEX id only
+when a genuine temporal replacement is clearly supported.
+
+Otherwise use null.
 """
 )
 
@@ -772,34 +825,85 @@ def _normalize_importance(
 def _sanitize_candidate(
     candidate,
     allowed_categories: set[str],
+    *,
+    allow_supersession: bool = False,
 ) -> dict | None:
-    if not isinstance(candidate, dict):
+
+    if not isinstance(
+        candidate,
+        dict,
+    ):
         return None
 
     content = str(
-        candidate.get("content", "")
+        candidate.get(
+            "content",
+            "",
+        )
     ).strip()
 
-    if not content or len(content) > 500:
+    if (
+        not content
+        or len(content) > 500
+    ):
         return None
 
     category = str(
-        candidate.get("category", "")
+        candidate.get(
+            "category",
+            "",
+        )
     ).strip().lower()
 
-    if category not in allowed_categories:
+    if (
+        category
+        not in allowed_categories
+    ):
         return None
 
-    importance = _normalize_importance(
-        candidate.get("importance", 3)
+    importance = (
+        _normalize_importance(
+            candidate.get(
+                "importance",
+                3,
+            )
+        )
     )
 
-    return {
-        "content": content,
-        "category": category,
-        "importance": importance,
+    result = {
+        "content":
+            content,
+
+        "category":
+            category,
+
+        "importance":
+            importance,
     }
 
+    if allow_supersession:
+
+        raw_target = (
+            candidate.get(
+                "supersedes_memory_id"
+            )
+        )
+
+        if raw_target is not None:
+
+            target = str(
+                raw_target
+            ).strip()
+
+            if (
+                target
+                and len(target) <= 128
+            ):
+                result[
+                    "supersedes_memory_id"
+                ] = target
+
+    return result
 
 def _extract_candidate(
     data: dict | None,
@@ -943,14 +1047,23 @@ EXISTING LONG-TERM MEMORY:
         return None
 
     return {
-        "user_memory": _sanitize_candidate(
-            data.get("user_memory"),
-            USER_MEMORY_CATEGORIES,
-        ),
-        "self_memory": _sanitize_candidate(
-            data.get("self_memory"),
-            SELF_MEMORY_CATEGORIES,
-        ),
+        "user_memory":
+            _sanitize_candidate(
+                data.get(
+                    "user_memory"
+                ),
+                USER_MEMORY_CATEGORIES,
+                allow_supersession=True,
+            ),
+
+        "self_memory":
+            _sanitize_candidate(
+                data.get(
+                    "self_memory"
+                ),
+                SELF_MEMORY_CATEGORIES,
+                allow_supersession=True,
+            ),
     }
 
 # ============================================================
@@ -1083,8 +1196,8 @@ def maybe_reflect(
         return None
 
     existing_memory = (
-        build_memory_context(
-            limit=20,
+        build_memory_validation_context(
+            limit=30,
         )
     )
 
@@ -1203,8 +1316,41 @@ def maybe_reflect(
                     evidence_event_ids=(
                         evidence_event_ids
                     ),
+                    supersedes_memory_id=(
+                        user_memory.get(
+                            "supersedes_memory_id"
+                        )
+                    ),
                 )
             )
+
+            if (
+                turn_id is not None
+                and memory_record.get(
+                    "status"
+                )
+                == "superseded"
+            ):
+
+                record_memory_supersession(
+                    turn_id,
+                    old_memory_id=(
+                        memory_record[
+                            "superseded_memory_id"
+                        ]
+                    ),
+                    new_memory_id=(
+                        memory_record[
+                            "id"
+                        ]
+                    ),
+                    subject="user",
+                    evidence_event_ids=(
+                        evidence_event_ids
+                    ),
+                )
+
+
 
             if turn_id is not None:
 
@@ -1283,16 +1429,35 @@ def maybe_reflect(
                     evidence_event_ids=(
                         evidence_event_ids
                     ),
+                    supersedes_memory_id=(
+                        self_memory.get(
+                            "supersedes_memory_id"
+                        )
+                    ),
                 )
             )
 
-            if turn_id is not None:
+            if (
+                turn_id is not None
+                and memory_record.get(
+                    "status"
+                )
+                == "superseded"
+            ):
 
-                record_memory_formation(
+                record_memory_supersession(
                     turn_id,
-                    memory_record=(
-                        memory_record
+                    old_memory_id=(
+                        memory_record[
+                            "superseded_memory_id"
+                        ]
                     ),
+                    new_memory_id=(
+                        memory_record[
+                            "id"
+                        ]
+                    ),
+                    subject="aperture",
                     evidence_event_ids=(
                         evidence_event_ids
                     ),

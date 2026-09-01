@@ -148,6 +148,97 @@ def _merge_evidence_event_ids(
     )
 
 
+def _prepare_memory_values(
+    *,
+    content: str,
+    category: str,
+    importance: int,
+    subject: str,
+    evidence_event_ids=None,
+) -> tuple[
+    str,
+    str,
+    int,
+    str,
+    list[str],
+    str,
+]:
+    content = (
+        str(content)
+        .strip()
+    )
+
+    if not content:
+        raise ValueError(
+            "Memory content cannot be empty."
+        )
+
+    if len(content) > 2000:
+        raise ValueError(
+            "Memory is too long. "
+            "Store a concise fact instead."
+        )
+
+    category = (
+        str(category)
+        .strip()
+        .lower()
+    )
+
+    if (
+        category
+        not in VALID_CATEGORIES
+    ):
+        raise ValueError(
+            "Invalid memory category: "
+            f"{category}"
+        )
+
+    subject = (
+        str(subject)
+        .strip()
+        .lower()
+    )
+
+    if (
+        subject
+        not in VALID_SUBJECTS
+    ):
+        raise ValueError(
+            "Invalid memory subject: "
+            f"{subject}"
+        )
+
+    importance = max(
+        1,
+        min(
+            int(importance),
+            5,
+        ),
+    )
+
+    evidence_event_ids = (
+        _normalize_evidence_event_ids(
+            evidence_event_ids
+        )
+    )
+
+    normalized = (
+        _normalize(
+            content
+        )
+    )
+
+    return (
+        content,
+        category,
+        importance,
+        subject,
+        evidence_event_ids,
+        normalized,
+    )
+
+
 def _memory_row_to_dict(
     row: sqlite3.Row,
 ) -> dict:
@@ -212,9 +303,9 @@ class MemoryStore:
 
         with self._connect() as connection:
 
-            # ------------------------------------------------
-            # Fresh schema
-            # ------------------------------------------------
+            # =================================================
+            # CURRENT SCHEMA
+            # =================================================
 
             connection.execute(
                 """
@@ -226,22 +317,31 @@ class MemoryStore:
                     importance INTEGER NOT NULL,
                     source TEXT NOT NULL,
                     subject TEXT NOT NULL DEFAULT 'user',
-                    evidence_event_ids_json TEXT NOT NULL DEFAULT '[]',
+
+                    evidence_event_ids_json
+                        TEXT NOT NULL DEFAULT '[]',
+
                     active INTEGER NOT NULL DEFAULT 1,
+
+                    valid_from TEXT NOT NULL,
+                    valid_until TEXT,
+
+                    supersedes_memory_id TEXT,
+
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE(subject, normalized_content)
+                    updated_at TEXT NOT NULL
                 )
                 """
             )
 
-            # ------------------------------------------------
-            # Migration: missing columns
-            # ------------------------------------------------
+            # =================================================
+            # COLUMN MIGRATION
+            # =================================================
 
             columns = {
                 row["name"]
-                for row in connection.execute(
+                for row
+                in connection.execute(
                     "PRAGMA table_info(memories)"
                 ).fetchall()
             }
@@ -272,17 +372,70 @@ class MemoryStore:
                     """
                 )
 
-            # Refresh after migration.
-            columns = {
-                row["name"]
-                for row in connection.execute(
-                    "PRAGMA table_info(memories)"
-                ).fetchall()
-            }
+            if (
+                "valid_from"
+                not in columns
+            ):
+                connection.execute(
+                    """
+                    ALTER TABLE memories
+                    ADD COLUMN valid_from TEXT
+                    """
+                )
 
-            # ------------------------------------------------
-            # Detect old global UNIQUE(normalized_content)
-            # ------------------------------------------------
+            if (
+                "valid_until"
+                not in columns
+            ):
+                connection.execute(
+                    """
+                    ALTER TABLE memories
+                    ADD COLUMN valid_until TEXT
+                    """
+                )
+
+            if (
+                "supersedes_memory_id"
+                not in columns
+            ):
+                connection.execute(
+                    """
+                    ALTER TABLE memories
+                    ADD COLUMN supersedes_memory_id TEXT
+                    """
+                )
+
+            # Existing memories existed before temporal memory.
+            # Their creation timestamp is the best honest
+            # approximation of valid_from.
+            connection.execute(
+                """
+                UPDATE memories
+                SET valid_from = created_at
+                WHERE valid_from IS NULL
+                   OR TRIM(valid_from) = ''
+                """
+            )
+
+            # =================================================
+            # LEGACY UNIQUE-CONSTRAINT DETECTION
+            #
+            # Old versions used:
+            #
+            # UNIQUE(normalized_content)
+            #
+            # or:
+            #
+            # UNIQUE(subject, normalized_content)
+            #
+            # Temporal memory cannot keep either globally,
+            # because:
+            #
+            # Python -> Java -> Python
+            #
+            # must be able to create a second historical Python
+            # memory instead of rewriting the first one.
+            # =================================================
 
             unique_indexes = (
                 connection.execute(
@@ -290,9 +443,7 @@ class MemoryStore:
                 ).fetchall()
             )
 
-            has_global_content_unique = (
-                False
-            )
+            needs_rebuild = False
 
             for index in unique_indexes:
 
@@ -311,25 +462,37 @@ class MemoryStore:
                     ).fetchall()
                 ]
 
-                if (
-                    indexed_columns
-                    == [
-                        "normalized_content"
-                    ]
-                ):
-                    has_global_content_unique = (
-                        True
-                    )
+                index_data = dict(
+                    index
+                )
 
+                is_partial = bool(
+                    index_data.get(
+                        "partial",
+                        0,
+                    )
+                )
+
+                if is_partial:
+                    continue
+
+                if indexed_columns in (
+                    [
+                        "normalized_content"
+                    ],
+                    [
+                        "subject",
+                        "normalized_content",
+                    ],
+                ):
+                    needs_rebuild = True
                     break
 
-            # ------------------------------------------------
-            # Old-table rebuild
-            # ------------------------------------------------
+            # =================================================
+            # TABLE REBUILD
+            # =================================================
 
-            if (
-                has_global_content_unique
-            ):
+            if needs_rebuild:
 
                 connection.execute(
                     """
@@ -341,11 +504,19 @@ class MemoryStore:
                         importance INTEGER NOT NULL,
                         source TEXT NOT NULL,
                         subject TEXT NOT NULL DEFAULT 'user',
-                        evidence_event_ids_json TEXT NOT NULL DEFAULT '[]',
+
+                        evidence_event_ids_json
+                            TEXT NOT NULL DEFAULT '[]',
+
                         active INTEGER NOT NULL DEFAULT 1,
+
+                        valid_from TEXT NOT NULL,
+                        valid_until TEXT,
+
+                        supersedes_memory_id TEXT,
+
                         created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        UNIQUE(subject, normalized_content)
+                        updated_at TEXT NOT NULL
                     )
                     """
                 )
@@ -362,6 +533,9 @@ class MemoryStore:
                         subject,
                         evidence_event_ids_json,
                         active,
+                        valid_from,
+                        valid_until,
+                        supersedes_memory_id,
                         created_at,
                         updated_at
                     )
@@ -375,6 +549,12 @@ class MemoryStore:
                         subject,
                         evidence_event_ids_json,
                         active,
+                        COALESCE(
+                            valid_from,
+                            created_at
+                        ),
+                        valid_until,
+                        supersedes_memory_id,
                         created_at,
                         updated_at
                     FROM memories
@@ -382,7 +562,9 @@ class MemoryStore:
                 )
 
                 connection.execute(
-                    "DROP TABLE memories"
+                    """
+                    DROP TABLE memories
+                    """
                 )
 
                 connection.execute(
@@ -392,9 +574,9 @@ class MemoryStore:
                     """
                 )
 
-            # ------------------------------------------------
-            # Indexes
-            # ------------------------------------------------
+            # =================================================
+            # INDEXES
+            # =================================================
 
             connection.execute(
                 """
@@ -420,6 +602,32 @@ class MemoryStore:
                 """
             )
 
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                idx_memories_supersedes
+                ON memories(
+                    supersedes_memory_id
+                )
+                """
+            )
+
+            # Only CURRENT memories must be unique.
+            #
+            # Historical inactive memories may repeat the same
+            # semantic text at different points in time.
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_memories_current_unique
+                ON memories(
+                    subject,
+                    normalized_content
+                )
+                WHERE active = 1
+                """
+            )
+
 
     def remember(
         self,
@@ -431,72 +639,21 @@ class MemoryStore:
         evidence_event_ids=None,
     ) -> dict:
 
-        content = (
-            content.strip()
-        )
-
-        if not content:
-            raise ValueError(
-                "Memory content cannot be empty."
-            )
-
-        if (
-            len(content)
-            > 2000
-        ):
-            raise ValueError(
-                "Memory is too long. "
-                "Store a concise fact instead."
-            )
-
-        category = (
-            category
-            .strip()
-            .lower()
-        )
-
-        if (
-            category
-            not in VALID_CATEGORIES
-        ):
-            raise ValueError(
-                "Invalid memory category: "
-                f"{category}"
-            )
-
-        subject = (
-            subject
-            .strip()
-            .lower()
-        )
-
-        if (
-            subject
-            not in VALID_SUBJECTS
-        ):
-            raise ValueError(
-                "Invalid memory subject: "
-                f"{subject}"
-            )
-
-        importance = max(
-            1,
-            min(
-                int(importance),
-                5,
-            ),
-        )
-
-        evidence_event_ids = (
-            _normalize_evidence_event_ids(
+        (
+            content,
+            category,
+            importance,
+            subject,
+            evidence_event_ids,
+            normalized,
+        ) = _prepare_memory_values(
+            content=content,
+            category=category,
+            importance=importance,
+            subject=subject,
+            evidence_event_ids=(
                 evidence_event_ids
-            )
-        )
-
-        normalized = (
-            _normalize(
-                content
-            )
+            ),
         )
 
         timestamp = _now()
@@ -510,6 +667,7 @@ class MemoryStore:
                     FROM memories
                     WHERE subject = ?
                       AND normalized_content = ?
+                      AND active = 1
                     """,
                     (
                         subject,
@@ -520,7 +678,7 @@ class MemoryStore:
             )
 
             # =================================================
-            # EXISTING MEMORY
+            # CURRENT EXACT MEMORY EXISTS
             # =================================================
 
             if existing:
@@ -555,9 +713,7 @@ class MemoryStore:
                         category = ?,
                         importance = ?,
                         source = ?,
-                        subject = ?,
                         evidence_event_ids_json = ?,
-                        active = 1,
                         updated_at = ?
                     WHERE id = ?
                     """,
@@ -566,7 +722,6 @@ class MemoryStore:
                         category,
                         new_importance,
                         source,
-                        subject,
                         _encode_evidence_event_ids(
                             merged_evidence
                         ),
@@ -576,25 +731,51 @@ class MemoryStore:
                 )
 
                 return {
-                    "status": "existing",
-                    "id": (
-                        existing["id"]
-                    ),
-                    "content": content,
+                    "status":
+                        "existing",
+
+                    "id":
+                        existing["id"],
+
+                    "content":
+                        content,
+
                     "category":
                         category,
+
                     "importance":
                         new_importance,
+
                     "source":
                         source,
+
                     "subject":
                         subject,
+
                     "evidence_event_ids":
                         merged_evidence,
+
+                    "valid_from":
+                        existing[
+                            "valid_from"
+                        ],
+
+                    "valid_until":
+                        existing[
+                            "valid_until"
+                        ],
+
+                    "supersedes_memory_id":
+                        existing[
+                            "supersedes_memory_id"
+                        ],
+
+                    "superseded_memory_id":
+                        None,
                 }
 
             # =================================================
-            # NEW MEMORY
+            # NEW CURRENT MEMORY
             # =================================================
 
             memory_id = (
@@ -614,11 +795,20 @@ class MemoryStore:
                     subject,
                     evidence_event_ids_json,
                     active,
+                    valid_from,
+                    valid_until,
+                    supersedes_memory_id,
                     created_at,
                     updated_at
                 )
                 VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?,
+                    1,
+                    ?,
+                    NULL,
+                    NULL,
+                    ?,
+                    ?
                 )
                 """,
                 (
@@ -632,6 +822,7 @@ class MemoryStore:
                     _encode_evidence_event_ids(
                         evidence_event_ids
                     ),
+                    timestamp,
                     timestamp,
                     timestamp,
                 ),
@@ -661,6 +852,367 @@ class MemoryStore:
 
                 "evidence_event_ids":
                     evidence_event_ids,
+
+                "valid_from":
+                    timestamp,
+
+                "valid_until":
+                    None,
+
+                "supersedes_memory_id":
+                    None,
+
+                "superseded_memory_id":
+                    None,
+            }
+
+
+    def supersede(
+        self,
+        memory_id: str,
+        *,
+        content: str,
+        category: str,
+        importance: int,
+        source: str,
+        subject: str,
+        evidence_event_ids=None,
+    ) -> dict:
+        """
+        Replace one CURRENT memory with a new temporal version.
+
+        The old memory is preserved as historical evidence.
+
+        This is NOT deletion.
+
+        old:
+            active = 0
+            valid_until = timestamp
+
+        new:
+            active = 1
+            valid_from = timestamp
+            supersedes_memory_id = old.id
+        """
+
+        (
+            content,
+            category,
+            importance,
+            subject,
+            evidence_event_ids,
+            normalized,
+        ) = _prepare_memory_values(
+            content=content,
+            category=category,
+            importance=importance,
+            subject=subject,
+            evidence_event_ids=(
+                evidence_event_ids
+            ),
+        )
+
+        memory_id = (
+            str(memory_id)
+            .strip()
+        )
+
+        if not memory_id:
+            raise ValueError(
+                "memory_id cannot be empty."
+            )
+
+        timestamp = _now()
+
+        with self._connect() as connection:
+
+            previous = (
+                connection.execute(
+                    """
+                    SELECT *
+                    FROM memories
+                    WHERE id = ?
+                      AND active = 1
+                    """,
+                    (
+                        memory_id,
+                    ),
+                )
+                .fetchone()
+            )
+
+            if previous is None:
+                raise ValueError(
+                    "Cannot supersede memory: "
+                    "target does not exist "
+                    "or is not current. "
+                    f"id={memory_id}"
+                )
+
+            if (
+                previous["subject"]
+                != subject
+            ):
+                raise ValueError(
+                    "Cannot supersede memory "
+                    "across subjects: "
+                    f"{previous['subject']} "
+                    f"-> {subject}"
+                )
+
+            # =================================================
+            # EXACT SAME MEMORY
+            #
+            # This is reinforcement / duplicate evidence,
+            # not a temporal replacement.
+            # =================================================
+
+            if (
+                previous[
+                    "normalized_content"
+                ]
+                == normalized
+            ):
+
+                old_evidence = (
+                    _decode_evidence_event_ids(
+                        previous[
+                            "evidence_event_ids_json"
+                        ]
+                    )
+                )
+
+                merged_evidence = (
+                    _merge_evidence_event_ids(
+                        old_evidence,
+                        evidence_event_ids,
+                    )
+                )
+
+                new_importance = max(
+                    importance,
+                    previous[
+                        "importance"
+                    ],
+                )
+
+                connection.execute(
+                    """
+                    UPDATE memories
+                    SET
+                        content = ?,
+                        category = ?,
+                        importance = ?,
+                        source = ?,
+                        evidence_event_ids_json = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        content,
+                        category,
+                        new_importance,
+                        source,
+                        _encode_evidence_event_ids(
+                            merged_evidence
+                        ),
+                        timestamp,
+                        memory_id,
+                    ),
+                )
+
+                return {
+                    "status":
+                        "existing",
+
+                    "id":
+                        memory_id,
+
+                    "content":
+                        content,
+
+                    "category":
+                        category,
+
+                    "importance":
+                        new_importance,
+
+                    "source":
+                        source,
+
+                    "subject":
+                        subject,
+
+                    "evidence_event_ids":
+                        merged_evidence,
+
+                    "valid_from":
+                        previous[
+                            "valid_from"
+                        ],
+
+                    "valid_until":
+                        None,
+
+                    "supersedes_memory_id":
+                        previous[
+                            "supersedes_memory_id"
+                        ],
+
+                    "superseded_memory_id":
+                        None,
+                }
+
+            # =================================================
+            # PROTECT CURRENT UNIQUE STATE
+            # =================================================
+
+            conflicting_current = (
+                connection.execute(
+                    """
+                    SELECT id
+                    FROM memories
+                    WHERE subject = ?
+                      AND normalized_content = ?
+                      AND active = 1
+                      AND id != ?
+                    """,
+                    (
+                        subject,
+                        normalized,
+                        memory_id,
+                    ),
+                )
+                .fetchone()
+            )
+
+            if (
+                conflicting_current
+                is not None
+            ):
+                raise ValueError(
+                    "Cannot supersede memory "
+                    "into another already-current "
+                    "equivalent memory. "
+                    f"id={conflicting_current['id']}"
+                )
+
+            # =================================================
+            # CLOSE OLD VALIDITY WINDOW
+            # =================================================
+
+            connection.execute(
+                """
+                UPDATE memories
+                SET
+                    active = 0,
+                    valid_until = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    timestamp,
+                    timestamp,
+                    memory_id,
+                ),
+            )
+
+            # =================================================
+            # CREATE NEW VERSION
+            # =================================================
+
+            new_memory_id = (
+                uuid.uuid4()
+                .hex[:12]
+            )
+
+            connection.execute(
+                """
+                INSERT INTO memories (
+                    id,
+                    category,
+                    content,
+                    normalized_content,
+                    importance,
+                    source,
+                    subject,
+                    evidence_event_ids_json,
+                    active,
+                    valid_from,
+                    valid_until,
+                    supersedes_memory_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?,
+                    1,
+                    ?,
+                    NULL,
+                    ?,
+                    ?,
+                    ?
+                )
+                """,
+                (
+                    new_memory_id,
+                    category,
+                    content,
+                    normalized,
+                    importance,
+                    source,
+                    subject,
+                    _encode_evidence_event_ids(
+                        evidence_event_ids
+                    ),
+                    timestamp,
+                    memory_id,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+            return {
+                "status":
+                    "superseded",
+
+                "id":
+                    new_memory_id,
+
+                "content":
+                    content,
+
+                "category":
+                    category,
+
+                "importance":
+                    importance,
+
+                "source":
+                    source,
+
+                "subject":
+                    subject,
+
+                "evidence_event_ids":
+                    evidence_event_ids,
+
+                "valid_from":
+                    timestamp,
+
+                "valid_until":
+                    None,
+
+                "supersedes_memory_id":
+                    memory_id,
+
+                "superseded_memory_id":
+                    memory_id,
+
+                "previous_memory":
+                    _memory_row_to_dict(
+                        previous
+                    ),
             }
 
 
@@ -882,6 +1434,67 @@ class MemoryStore:
 
 _STORE = MemoryStore()
 
+
+def build_memory_validation_context(
+    limit: int = 40,
+) -> str:
+    """
+    Memory context for internal Reflection validation.
+
+    Unlike normal runtime memory context, this exposes
+    stable memory IDs so the validator can explicitly
+    request temporal supersession.
+    """
+
+    memories = (
+        _STORE.top_memories(
+            limit=limit
+        )
+    )
+
+    if not memories:
+        return (
+            "<CURRENT_MEMORY_INDEX>\n"
+            "No current long-term memories stored.\n"
+            "</CURRENT_MEMORY_INDEX>"
+        )
+
+    lines = [
+        "<CURRENT_MEMORY_INDEX>",
+        (
+            "These are CURRENT durable memories. "
+            "They are context for duplicate and temporal "
+            "update detection, not evidence that the current "
+            "conversation said something."
+        ),
+        "",
+        (
+            "The id field may be used only as "
+            "supersedes_memory_id when the current conversation "
+            "clearly replaces that memory."
+        ),
+        "",
+    ]
+
+    for memory in memories:
+
+        lines.append(
+            "- "
+            f"id={memory['id']} "
+            f"subject={memory['subject']} "
+            f"category={memory['category']} "
+            f"| {memory['content']}"
+        )
+
+    lines.append(
+        "</CURRENT_MEMORY_INDEX>"
+    )
+
+    return "\n".join(
+        lines
+    )
+
+
 def build_self_memory_context(
     limit: int = 20,
 ) -> str:
@@ -1007,15 +1620,19 @@ def save_reflection_memory(
     category: str,
     importance: int,
     evidence_event_ids: list[str],
+    supersedes_memory_id: (
+        str | None
+    ) = None,
 ) -> dict:
     """
     Internal structured memory-write API used by Reflection.
 
-    Unlike save_memory/save_self_memory, this function is not
-    exposed to the conversational model as a tool.
+    Reflection may either:
 
-    evidence_event_ids describe the observed experience window
-    used when forming this memory.
+    1. create/reinforce a current memory
+    2. supersede one explicitly identified current memory
+
+    This function is not exposed as a conversational tool.
     """
 
     subject = (
@@ -1031,6 +1648,20 @@ def save_reflection_memory(
         raise ValueError(
             "Reflection memory subject "
             "must be 'user' or 'aperture'."
+        )
+
+    if supersedes_memory_id:
+
+        return _STORE.supersede(
+            supersedes_memory_id,
+            content=content,
+            category=category,
+            importance=importance,
+            source="reflection",
+            subject=subject,
+            evidence_event_ids=(
+                evidence_event_ids
+            ),
         )
 
     return _STORE.remember(
@@ -1259,4 +1890,6 @@ def build_memory_context(
     lines.append("</LONG_TERM_MEMORY>")
 
     return "\n".join(lines)
+
+
 
