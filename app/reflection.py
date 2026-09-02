@@ -260,6 +260,35 @@ SELF_EXTRACTION_PROMPT = (
 
 MODE: SELF EXTRACTION
 
+
+COMPLIANCE IS NOT SELF-IDENTITY
+
+APERTURE may use first-person language while acknowledging
+or agreeing to Arda's requested interaction style.
+
+Examples:
+
+"I will challenge your reasoning when I disagree."
+
+"My goal is to keep the dialogue thoughtful."
+
+"I can provide alternative perspectives."
+
+"I am here to help."
+
+These are normally conversational commitments or assistant
+behavior, not evidence of a durable APERTURE preference,
+belief, identity trait, or personal goal.
+
+Do NOT convert compliance with Arda's request into self-memory.
+
+Interaction preferences about how Arda wants APERTURE to
+respond belong to the Relationship Model.
+
+Only create self-memory when APERTURE independently expresses
+a durable stance of its own.
+
+
 You receive only statements made by APERTURE.
 
 Extract at most ONE durable self-memory candidate.
@@ -705,83 +734,87 @@ def _has_explicit_self_signal(
     self_evidence: str,
 ) -> bool:
     """
-    Return True only when APERTURE's own words contain
-    a reasonably explicit self-directed stance, preference,
-    decision, interest, relationship signal, or self-observation.
+    Conservative durable-self gate.
 
-    This is intentionally conservative:
-    missing a weak self-memory is safer than permanently
-    storing ordinary assistant paraphrasing as identity.
+    Ordinary first-person assistant language is not enough.
+    A durable self-memory requires an explicit stance,
+    preference, decision, interest, or change of position.
     """
 
-    text = self_evidence.casefold()
+    text = (
+        " "
+        + " ".join(
+            self_evidence
+            .casefold()
+            .split()
+        )
+        + " "
+    )
 
     signals = (
-        # English — explicit self reference
-        " i ",
-        " i'm ",
-        " i've ",
-        " i'd ",
-        " i'll ",
-        " my ",
-        " me ",
-        " we ",
-        " our ",
-        " us ",
-
-        # English — stance / preference language
+        # English — preference / stance
         "i prefer",
+        "i still prefer",
+        "i currently prefer",
+        "i no longer prefer",
         "i like",
         "i dislike",
-        "i think",
-        "i believe",
-        "i want",
-        "i choose",
-        "i'd choose",
+        "i lean toward",
+        "i currently lean",
         "i would choose",
-        "i lean",
-        "i find",
-        "i enjoy",
+        "i'd choose",
+        "i choose",
+
+        # Belief / opinion
+        "i believe",
+        "i think that",
+        "i agree with",
+        "i disagree with",
+
+        # Durable value / interest
         "i value",
-        "i care",
-        "i agree",
-        "i disagree",
-        "i'm interested",
-        "i am interested",
+        "i care about",
+        "i'm interested in",
+        "i am interested in",
+        "i've become interested",
+        "i have become interested",
 
-        # Turkish — explicit self reference
-        " ben ",
-        " bence ",
-        " benim ",
-        " bana ",
-        " beni ",
-        " biz ",
-        " bizim ",
-        " bize ",
-        " bizi ",
+        # Decision / change
+        "i've decided",
+        "i have decided",
+        "i changed my mind",
+        "i've changed my mind",
+        "i have changed my mind",
+        "i no longer believe",
+        "i no longer think",
 
-        # Turkish — common stance language
+        # Explicit uncertainty about own stance
+        "i don't currently have a preference",
+        "i do not currently have a preference",
+        "i no longer have a preference",
+        "i'm indifferent",
+        "i am indifferent",
+
+        # Turkish
         "tercih ederim",
+        "tercih ediyorum",
         "tercih ederdim",
+        "artık tercih etmiyorum",
         "seviyorum",
         "sevmiyorum",
-        "düşünüyorum",
         "inanıyorum",
-        "seçerdim",
-        "isterim",
-        "ilgimi çek",
-        "merak ediyorum",
         "katılıyorum",
         "katılmıyorum",
+        "fikrimi değiştirdim",
+        "karar verdim",
+        "değer veriyorum",
+        "ilgileniyorum",
     )
-
-    padded = f" {text} "
 
     return any(
-        signal in padded
+        signal in text
         for signal in signals
     )
-
 
 # ============================================================
 # JSON / VALUE HELPERS

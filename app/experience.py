@@ -1222,3 +1222,32 @@ def record_memory_supersession(
                 evidence_event_ids,
         },
     )
+
+
+def record_relationship_state_update(
+    turn_id: str,
+    *,
+    previous_state: dict,
+    updated_state: dict,
+) -> dict:
+
+    return record_event(
+        turn_id=turn_id,
+        event_type=(
+            "relationship_state_update"
+        ),
+        event_class="derived",
+        actor="relationship",
+        content=json.dumps(
+            updated_state,
+            ensure_ascii=False,
+        ),
+        metadata={
+            "previous_state":
+                previous_state,
+
+            "updated_state":
+                updated_state,
+        },
+    )
+

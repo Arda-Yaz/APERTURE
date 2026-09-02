@@ -9,12 +9,21 @@ from self_state import (
     get_self_state,
 )
 
+
+from relationship import (
+    build_relationship_context,
+    get_relationship_state,
+    maybe_update_relationship,
+)
+
+
 from experience import (
     start_turn,
     record_assistant_message,
     record_tool_call,
     record_tool_result,
     record_self_state_update,
+    record_relationship_state_update,
     record_turn_stopped,
 )
 
@@ -275,6 +284,10 @@ def inject_runtime_context(
         build_memory_context()
     )
 
+    relationship_context = (
+        build_relationship_context()
+    )
+
     relevant_memory_context = (
         build_relevant_memory_context(
             query=user_message,
@@ -286,6 +299,8 @@ def inject_runtime_context(
         persona_context
         + "\n\n"
         + dynamic_self_context
+        + "\n\n"
+        + relationship_context
         + "\n\n"
         + memory_context
         + "\n\n"
@@ -419,7 +434,50 @@ def finalize_answer(
             ),
         )
 
+
+
+        # --------------------------------------------------------
+    # RELATIONSHIP MODEL
+    # --------------------------------------------------------
+
+    previous_relationship_state = (
+        get_relationship_state()
+    )
+
+    relationship_result = (
+        maybe_update_relationship(
+            messages,
+            used_action_tool=(
+                used_action_tool
+            ),
+            memory_operation_used=(
+                memory_operation_used
+            ),
+        )
+    )
+
+    if relationship_result is not None:
+
+        print(
+            "\n[RELATIONSHIP] "
+            f"{relationship_result}"
+        )
+
+        record_relationship_state_update(
+            turn_id,
+            previous_state=(
+                previous_relationship_state
+            ),
+            updated_state=(
+                relationship_result
+            ),
+        )
+
     return answer
+
+
+
+
 
 
 # ============================================================

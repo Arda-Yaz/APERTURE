@@ -5,8 +5,6 @@ from copy import deepcopy
 
 from ollama import chat as ollama_chat
 
-from memory import build_self_memory_context
-
 
 MODEL = "qwen3:8b"
 
@@ -19,14 +17,12 @@ STATE_KEYS = (
     "current_orientation",
     "active_interests",
     "unresolved_positions",
-    "relationship_context",
 )
 
 MAX_ITEMS_PER_FIELD = {
     "current_orientation": 3,
     "active_interests": 4,
     "unresolved_positions": 3,
-    "relationship_context": 2,
 }
 
 MAX_ITEM_LENGTH = 1000
@@ -65,7 +61,6 @@ A topic being discussed does NOT make it:
 - an APERTURE interest
 - an APERTURE orientation
 - an unresolved APERTURE position
-- relationship context
 
 Arda asking about something does NOT make APERTURE interested in it.
 
@@ -74,6 +69,20 @@ APERTURE explaining something does NOT make APERTURE interested in it.
 APERTURE being helpful about a topic does NOT make that topic
 part of APERTURE's identity or current state.
 
+SOURCE BOUNDARY
+
+A NEW state item may originate only from APERTURE-ONLY EVIDENCE.
+
+PREVIOUS DYNAMIC SELF-STATE may preserve an already-existing
+item when it still appears current.
+
+No other context may introduce a new state item.
+
+In particular, historical long-term self-memory must first
+become relevant through APERTURE's current self-expression
+before it can become current Dynamic Self again.
+
+Historical continuity is not automatically current state.
 
 ============================================================
 THIS STATE IS NOT
@@ -195,39 +204,6 @@ Do not create unresolved positions merely because:
 - the conversation could continue
 
 
-relationship_context
-
-A current interpretation APERTURE itself explicitly forms
-about its interaction or relationship with Arda.
-
-This field has a very high evidence threshold.
-
-Facts about Arda are NOT relationship context.
-
-Arda asking questions is NOT relationship context.
-
-Arda discussing a topic repeatedly is NOT relationship context.
-
-Do not infer:
-- trust
-- closeness
-- attachment
-- familiarity
-- shared interests
-- emotional significance
-
-unless APERTURE itself clearly expressed such an interpretation.
-
-Examples of potentially valid evidence:
-
-"I think our conversations are becoming more exploratory."
-
-"I notice I have started to value the way Arda challenges
-my assumptions."
-
-Even then, preserve uncertainty and do not exaggerate.
-
-
 ============================================================
 NEGATIVE EXAMPLE
 ============================================================
@@ -263,12 +239,9 @@ A reasonable replacement state could be:
 
 {
   "state": {
-    "current_orientation": [
-      "I currently lean toward Python because I value its flexibility and expressiveness, while remaining willing to use Java when it better fits the project."
-    ],
+    "current_orientation": [...],
     "active_interests": [],
-    "unresolved_positions": [],
-    "relationship_context": []
+    "unresolved_positions": []
   }
 }
 
@@ -277,7 +250,7 @@ Do NOT infer:
 - "I am interested in programming languages."
 - "I want to explore Python's advantages."
 - "I am undecided about Python versus Java."
-- "Arda and I share an interest in programming."
+
 
 None of those were actually expressed.
 
@@ -361,8 +334,7 @@ Exact structure:
   "state": {
     "current_orientation": [],
     "active_interests": [],
-    "unresolved_positions": [],
-    "relationship_context": []
+    "unresolved_positions": []
   }
 }
 
@@ -530,6 +502,8 @@ def _has_explicit_self_signal(
 
     signals = (
         # English
+        "i've become genuinely interested",
+        "i have become genuinely interested",
         "i prefer",
         "i currently prefer",
         "i lean",
@@ -539,15 +513,10 @@ def _has_explicit_self_signal(
         "i choose",
         "i think i",
         "i believe",
-        "i feel",
-        "i want",
         "i value",
         "i care about",
         "i am interested",
         "i'm interested",
-        "i am curious",
-        "i'm curious",
-        "i wonder",
         "i'm not sure",
         "i am not sure",
         "i don't know whether",
@@ -573,6 +542,14 @@ def _has_explicit_self_signal(
         "i no longer have a preference",
         "i'm indifferent",
         "i am indifferent",
+        "i want to explore",
+        "i would like to explore",
+        "i am genuinely interested",
+        "i'm genuinely interested",
+        "i keep finding myself curious",
+        "i've become interested",
+        "i have become interested",
+        "this genuinely interests me",
 
         # Turkish
         "tercih ederim",
@@ -586,14 +563,10 @@ def _has_explicit_self_signal(
         "ben düşünüyorum",
         "benim düşüncem",
         "inanıyorum",
-        "isterim",
-        "istiyorum",
         "önemsiyorum",
         "değer veriyorum",
         "ilgimi çekiyor",
         "ilgimi çekmeye",
-        "merak ediyorum",
-        "merakımı",
         "emin değilim",
         "henüz emin değilim",
         "karar vermedim",
@@ -603,6 +576,10 @@ def _has_explicit_self_signal(
         "yeniden değerlendiriyorum",
         "fark ediyorum ki",
         "fark ettim ki",
+        "gerçekten ilgileniyorum",
+        "araştırmak istiyorum",
+        "incelemek istiyorum",
+        "giderek daha çok ilgimi çekiyor",
     )
 
     return any(
@@ -742,8 +719,10 @@ def _call_self_state_module(
     dialogue: str,
     self_evidence: str,
     previous_state: dict,
-    self_memory_context: str,
-) -> tuple[str, dict | None]:
+) -> tuple[
+    str,
+    dict | None,
+]:
 
     previous_state_json = (
         json.dumps(
@@ -757,13 +736,16 @@ def _call_self_state_module(
         model=MODEL,
         messages=[
             {
-                "role": "system",
-                "content": (
-                    SELF_STATE_PROMPT
-                ),
+                "role":
+                    "system",
+
+                "content":
+                    SELF_STATE_PROMPT,
             },
             {
-                "role": "user",
+                "role":
+                    "user",
+
                 "content": f"""
 APERTURE-ONLY EVIDENCE:
 
@@ -778,16 +760,13 @@ FULL RECENT CONVERSATION:
 PREVIOUS DYNAMIC SELF-STATE:
 
 {previous_state_json}
-
-
-LONG-TERM APERTURE SELF-MEMORY:
-
-{self_memory_context}
 """.strip(),
             },
         ],
         think=False,
-        options=SELF_STATE_OPTIONS,
+        options=(
+            SELF_STATE_OPTIONS
+        ),
     )
 
     raw = (
@@ -797,9 +776,10 @@ LONG-TERM APERTURE SELF-MEMORY:
 
     return (
         raw,
-        _parse_json(raw),
+        _parse_json(
+            raw
+        ),
     )
-
 
 # ============================================================
 # DEBUG / ANALYSIS
@@ -808,28 +788,32 @@ LONG-TERM APERTURE SELF-MEMORY:
 def analyze_self_state_debug(
     *,
     dialogue: str,
-    previous_state: dict | None = None,
-    self_memory_context: str | None = None,
+    previous_state: (
+        dict | None
+    ) = None,
+    self_memory_context: (
+        str | None
+    ) = None,
 ) -> dict:
 
+    # Kept only for backwards-compatible debug calls.
+    # Long-term self-memory is intentionally NOT direct
+    # evidence for Dynamic Self anymore.
+    _ = self_memory_context
+
     if previous_state is None:
+
         previous_state = (
             empty_self_state()
         )
 
     else:
+
         previous_state = (
             _sanitize_state(
                 previous_state
             )
             or empty_self_state()
-        )
-
-    if self_memory_context is None:
-        self_memory_context = (
-            build_self_memory_context(
-                limit=20,
-            )
         )
 
     self_evidence = (
@@ -845,19 +829,31 @@ def analyze_self_state_debug(
     )
 
     if not self_signal:
+
         return {
-            "previous_state": (
-                previous_state
-            ),
-            "self_evidence": (
-                self_evidence
-            ),
-            "self_signal": False,
-            "raw": None,
-            "parsed": None,
-            "requested_change": False,
-            "candidate": None,
-            "changed": False,
+            "previous_state":
+                previous_state,
+
+            "self_evidence":
+                self_evidence,
+
+            "self_signal":
+                False,
+
+            "raw":
+                None,
+
+            "parsed":
+                None,
+
+            "requested_change":
+                False,
+
+            "candidate":
+                None,
+
+            "changed":
+                False,
         }
 
     raw, parsed = (
@@ -869,9 +865,6 @@ def analyze_self_state_debug(
             previous_state=(
                 previous_state
             ),
-            self_memory_context=(
-                self_memory_context
-            ),
         )
     )
 
@@ -879,14 +872,22 @@ def analyze_self_state_debug(
     requested_change = False
 
     if (
-        isinstance(parsed, dict)
-        and "state" in parsed
+        isinstance(
+            parsed,
+            dict,
+        )
+        and "state"
+        in parsed
     ):
+
         raw_state = (
-            parsed.get("state")
+            parsed.get(
+                "state"
+            )
         )
 
         if raw_state is not None:
+
             requested_change = True
 
             candidate = (
@@ -902,22 +903,29 @@ def analyze_self_state_debug(
     )
 
     return {
-        "previous_state": (
-            previous_state
-        ),
-        "self_evidence": (
-            self_evidence
-        ),
-        "self_signal": (
-            self_signal
-        ),
-        "raw": raw,
-        "parsed": parsed,
-        "requested_change": (
-            requested_change
-        ),
-        "candidate": candidate,
-        "changed": changed,
+        "previous_state":
+            previous_state,
+
+        "self_evidence":
+            self_evidence,
+
+        "self_signal":
+            self_signal,
+
+        "raw":
+            raw,
+
+        "parsed":
+            parsed,
+
+        "requested_change":
+            requested_change,
+
+        "candidate":
+            candidate,
+
+        "changed":
+            changed,
     }
 
 
@@ -925,7 +933,9 @@ def analyze_self_state(
     *,
     dialogue: str,
     previous_state: dict,
-    self_memory_context: str,
+    self_memory_context: (
+        str | None
+    ) = None,
 ) -> dict | None:
 
     debug = (
@@ -941,7 +951,9 @@ def analyze_self_state(
     )
 
     candidate = (
-        debug["candidate"]
+        debug[
+            "candidate"
+        ]
     )
 
     if (
@@ -952,7 +964,6 @@ def analyze_self_state(
         return None
 
     return candidate
-
 
 # ============================================================
 # CURRENT SESSION STATE
@@ -1121,20 +1132,11 @@ def maybe_update_self_state(
         get_self_state()
     )
 
-    self_memory_context = (
-        build_self_memory_context(
-            limit=20,
-        )
-    )
-
     updated_state = (
         analyze_self_state(
             dialogue=dialogue,
             previous_state=(
                 previous_state
-            ),
-            self_memory_context=(
-                self_memory_context
             ),
         )
     )
