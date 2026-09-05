@@ -52,7 +52,7 @@ AI RESPONSE:
     text = response.message.content
 
     if text is None:
-        return True
+        return False
 
     text = text.strip()
 
@@ -64,4 +64,4 @@ AI RESPONSE:
         return bool(data["done"])
 
     except Exception:
-        return True
+        return False

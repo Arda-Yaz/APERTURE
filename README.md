@@ -1459,13 +1459,16 @@ Its fallback behavior and determinism can be improved.
 
 Relevant memory currently uses lightweight token overlap rather than embeddings or hybrid retrieval.
 
-### Reflection is intentionally conservative
+### Semantic cognitive passes add local inference cost
 
-The self-signal gate may occasionally miss weak or implicit self-memory.
+Dynamic Self and Relationship analysis rely on semantic model
+judgment rather than phrase-based cognition gates.
 
-This is a deliberate tradeoff:
+This favors architectural correctness over premature routing
+optimization.
 
-> missing a weak identity signal is safer than permanently storing generic assistant behavior as identity.
+Future performance work may add routing, but routing must not
+define semantic meaning.
 
 ### Dynamic Self is session-scoped
 
@@ -1532,7 +1535,7 @@ The repository does not currently declare an open-source license.
 - [x] Minimal core persona
 - [x] Automatic memory formation
 - [x] Multi-pass validated reflection
-- [x] Self-memory signal gate
+- [x] Evidence-scoped self-memory extraction
 - [x] Reflection regression debugging
 
 ## Identity / Cognition
@@ -1655,7 +1658,7 @@ speaker ownership problem
 → split extraction channels
 
 fake self-memory problem
-→ explicit self-signal gate
+→ speaker-scoped extraction + semantic validation
 
 candidate reliability problem
 → validator + schema sanitizer

@@ -2,6 +2,7 @@ import sys
 import unittest
 
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = (
@@ -22,67 +23,62 @@ sys.path.insert(
 
 
 from self_state import (  # noqa: E402
-    _has_explicit_self_signal
-    as has_self_state_signal,
-
+    STATE_KEYS,
+    _sanitize_state,
     analyze_self_state_debug,
     empty_self_state,
+    maybe_update_self_state,
+    reset_self_state,
+    _current_turn_dialogue,
 )
 
 from reflection import (  # noqa: E402
-    _has_explicit_self_signal
-    as has_reflection_self_signal,
+    SELF_MEMORY_CATEGORIES,
+    analyze_reflection_debug,
+    _split_dialogue_by_speaker,
+     analyze_self_consolidation,
 )
+
 
 
 class DynamicSelfBoundaryTests(
     unittest.TestCase
 ):
 
-    def test_generic_curiosity_is_not_self_state_signal(
+    def setUp(
         self,
     ):
 
-        evidence = """
-APERTURE: I'm curious to know how this affects your work.
-""".strip()
+        reset_self_state()
 
-        self.assertFalse(
-            has_self_state_signal(
-                evidence
-            )
+
+    def tearDown(
+        self,
+    ):
+
+        reset_self_state()
+
+
+    @patch(
+        "self_state._call_self_state_module"
+    )
+    def test_ordinary_language_is_semantically_analyzed(
+        self,
+        mock_call,
+    ):
+
+        mock_call.return_value = (
+            '{"state": null}',
+            {
+                "state":
+                    None
+            },
         )
-
-
-    def test_genuine_interest_is_self_state_signal(
-        self,
-    ):
-
-        evidence = """
-APERTURE: I've become genuinely interested in how persistent identity develops over time.
-""".strip()
-
-        self.assertTrue(
-            has_self_state_signal(
-                evidence
-            )
-        )
-
-
-    def test_long_term_memory_cannot_create_state_without_current_signal(
-        self,
-    ):
 
         dialogue = """
-ARDA: I usually prefer working late at night.
+ARDA: I usually work late at night.
 
-APERTURE: That's interesting. I'm curious to know how this affects your work.
-""".strip()
-
-        old_memory = """
-<APERTURE_SELF_MEMORY>
-- [preference] I currently prefer Python.
-</APERTURE_SELF_MEMORY>
+APERTURE: That's interesting. How does that affect your schedule?
 """.strip()
 
         result = (
@@ -91,15 +87,14 @@ APERTURE: That's interesting. I'm curious to know how this affects your work.
                 previous_state=(
                     empty_self_state()
                 ),
-                self_memory_context=(
-                    old_memory
-                ),
             )
         )
 
-        self.assertFalse(
+        mock_call.assert_called_once()
+
+        self.assertTrue(
             result[
-                "self_signal"
+                "analysis_ran"
             ]
         )
 
@@ -110,37 +105,346 @@ APERTURE: That's interesting. I'm curious to know how this affects your work.
         )
 
 
-class ReflectionBoundaryTests(
-    unittest.TestCase
-):
+    @patch(
+        "self_state._call_self_state_module"
+    )
+    def test_semantic_result_does_not_require_trigger_phrase(
+        self,
+        mock_call,
+    ):
 
-    def test_compliance_language_is_not_self_memory_signal(
+        candidate = {
+            "current_orientation":
+                [],
+
+            "active_interests": [
+                (
+                    "I find the question of persistent "
+                    "identity worth exploring further."
+                )
+            ],
+
+            "unresolved_positions":
+                [],
+        }
+
+        mock_call.return_value = (
+            "{}",
+            {
+                "state":
+                    candidate
+            },
+        )
+
+        dialogue = """
+ARDA: What has been on your mind?
+
+APERTURE: The question of persistent identity keeps drawing my attention in a way I would like to explore further.
+""".strip()
+
+        result = (
+            analyze_self_state_debug(
+                dialogue=dialogue,
+                previous_state=(
+                    empty_self_state()
+                ),
+            )
+        )
+
+        self.assertEqual(
+            result[
+                "candidate"
+            ],
+            candidate,
+        )
+
+
+    @patch(
+        "reflection._call_memory_module"
+    )
+    def test_self_consolidation_uses_validated_state(
+        self,
+        mock_call,
+    ):
+
+        mock_call.return_value = {
+            "candidate": {
+                "content":
+                    "I currently lean toward Python.",
+
+                "category":
+                    "preference",
+
+                "importance":
+                    3,
+
+                "supersedes_memory_id":
+                    None,
+            }
+        }
+
+        result = (
+            analyze_self_consolidation(
+                state_update={
+                    "current_orientation": [
+                        (
+                            "I currently lean "
+                            "toward Python."
+                        )
+                    ],
+                    "active_interests":
+                        [],
+                    "unresolved_positions":
+                        [],
+                },
+                assistant_evidence=(
+                    "Right now I lean toward Python."
+                ),
+                existing_memory=(
+                    "<CURRENT_MEMORY_INDEX />"
+                ),
+            )
+        )
+
+        self.assertIsNotNone(
+            result
+        )
+
+        if result is None:
+            self.fail(
+                "Expected a sanitized result."
+            )
+
+        self.assertEqual(
+            result[
+                "category"
+            ],
+            "preference",
+        )
+
+
+    def test_unknown_dynamic_self_fields_are_rejected(
         self,
     ):
 
-        evidence = """
-APERTURE: I understand your preference. I will challenge your reasoning when I genuinely disagree. My goal is to keep the dialogue thoughtful and open.
-""".strip()
+        state = {
+            "current_orientation":
+                [],
 
-        self.assertFalse(
-            has_reflection_self_signal(
-                evidence
+            "active_interests":
+                [],
+
+            "unresolved_positions":
+                [],
+
+            "personality_score":
+                0.8,
+        }
+
+        self.assertIsNone(
+            _sanitize_state(
+                state
             )
         )
 
 
-    def test_explicit_preference_remains_self_memory_signal(
+    @patch(
+        "self_state.analyze_self_state"
+    )
+
+
+    def test_action_turn_is_not_semantically_skipped(
+        self,
+        mock_analysis,
+    ):
+
+        mock_analysis.return_value = (
+            None
+        )
+
+        messages = [
+            {
+                "role":
+                    "user",
+
+                "content":
+                    "Read this file and tell me what you think.",
+            },
+            {
+                "role":
+                    "assistant",
+
+                "content":
+                    "I finished reading it.",
+            },
+        ]
+
+        maybe_update_self_state(
+            messages,
+            used_action_tool=True,
+            memory_operation_used=False,
+        )
+
+        mock_analysis.assert_called_once()
+
+
+@patch(
+    "reflection.extract_self_memory"
+)
+def test_automatic_reflection_does_not_use_raw_actor_for_self_memory(
+    self,
+    mock_self,
+):
+
+    dialogue = """
+ARDA: I work late at night.
+
+APERTURE: If you need help during that time, I am here to assist.
+""".strip()
+
+    result = (
+        analyze_reflection_debug(
+            dialogue=dialogue,
+            existing_memory=(
+                "<CURRENT_MEMORY_INDEX />"
+            ),
+        )
+    )
+
+    mock_self.assert_not_called()
+
+    self.assertIsNone(
+        result[
+            "self_candidate"
+        ]
+    )
+
+    self.assertIsNone(
+        result[
+            "final"
+        ][
+            "self_memory"
+        ]
+    )
+
+                                            
+    def test_reflection_self_evidence_uses_latest_aperture_turn_only(   
         self,
     ):
 
-        evidence = """
-APERTURE: I currently prefer Python because I value its clarity and flexibility.
-""".strip()
+        dialogue = """
+    ARDA: Challenge me when you disagree.
 
-        self.assertTrue(
-            has_reflection_self_signal(
-                evidence
+    APERTURE: I aim to engage in meaningful critical dialogue.
+
+    ARDA: I prefer working late.
+
+    APERTURE: That's useful to know.
+
+    ARDA: I play games before working.
+
+    APERTURE: Balancing both can be difficult.
+    """.strip()
+
+        (
+            user_evidence,
+            self_evidence,
+        ) = (
+            _split_dialogue_by_speaker(
+                dialogue
             )
+        )
+
+        self.assertIn(
+            "I play games before working",
+            user_evidence,
+        )
+
+        self.assertIn(
+            "Balancing both can be difficult",
+            self_evidence,
+        )
+
+        self.assertNotIn(
+            "I aim to engage",
+            self_evidence,
+        )
+
+
+    def test_dynamic_self_current_turn_excludes_old_assistant_evidence(
+    self,
+    ):
+
+        messages = [
+            {
+                "role":
+                    "user",
+
+                "content":
+                    "Challenge me when you disagree.",
+            },
+            {
+                "role":
+                    "assistant",
+
+                "content":
+                    (
+                        "I aim to engage in meaningful "
+                        "critical dialogue."
+                    ),
+            },
+            {
+                "role":
+                    "user",
+
+                "content":
+                    "I prefer working late.",
+            },
+            {
+                "role":
+                    "assistant",
+
+                "content":
+                    (
+                        "If you need help during late-night "
+                        "work, let me know."
+                    ),
+            },
+        ]
+
+        dialogue = (
+            _current_turn_dialogue(
+                messages
+            )
+        )
+
+        self.assertNotIn(
+            "I aim to engage",
+            dialogue,
+        )
+
+        self.assertIn(
+            "I prefer working late",
+            dialogue,
+        )
+
+        self.assertIn(
+            "If you need help",
+            dialogue,
+        )
+
+
+class ReflectionBoundaryTests(
+    unittest.TestCase
+):
+
+    def test_relationship_has_single_cognitive_owner(
+        self,
+    ):
+
+        self.assertNotIn(
+            "relationship",
+            SELF_MEMORY_CATEGORIES,
         )
 
 

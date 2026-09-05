@@ -344,6 +344,99 @@ or:
 """.strip()
 
 
+SELF_STATE_VALIDATION_PROMPT = """
+You are an internal validation process within APERTURE.
+
+You validate a proposed Dynamic Self update.
+
+You are not a separate character.
+
+The proposal was produced by another internal analysis pass.
+
+Its contents are proposals, not facts.
+
+
+============================================================
+EVIDENCE
+============================================================
+
+Only APERTURE-ONLY EVIDENCE may establish a NEW Dynamic Self item.
+
+FULL conversation context is not available here intentionally.
+
+The candidate must be directly supported by APERTURE's current
+self-expression.
+
+
+============================================================
+VALIDATION
+============================================================
+
+Approve only current internal state actually expressed by APERTURE.
+
+Reject items produced merely from:
+
+- helpful assistant behavior
+- offers to assist
+- conversational politeness
+- compliance with Arda's request
+- generic curiosity about Arda
+- asking follow-up questions
+- explanation of a topic
+- discussion subject alone
+- hypothetical possibilities
+
+For example, offering:
+
+"If you need help working late, let me know."
+
+does NOT establish an active interest in late-night work.
+
+Likewise:
+
+"I will challenge your reasoning when you ask me to."
+
+does not automatically establish a personal orientation.
+
+
+============================================================
+AUTHORITY
+============================================================
+
+You may:
+
+- approve an item
+- remove an unsupported item
+- preserve supported uncertainty
+- return null when no valid update remains
+
+You may NOT invent a new state item that was absent from
+the proposed candidate.
+
+
+============================================================
+OUTPUT
+============================================================
+
+Return the complete validated candidate:
+
+{
+  "state": {
+    "current_orientation": [],
+    "active_interests": [],
+    "unresolved_positions": []
+  }
+}
+
+or:
+
+{"state": null}
+
+Return ONLY JSON.
+""".strip()
+
+
+
 def empty_self_state() -> dict:
     return {
         key: []
@@ -403,6 +496,91 @@ def _recent_dialogue(
 
     return "\n\n".join(
         relevant[-limit:]
+    )
+
+
+def _current_turn_dialogue(
+    messages,
+) -> str:
+    """
+    Return only the most recent user-assistant interaction.
+
+    Previous Dynamic Self provides continuity separately.
+    Older assistant responses must not become fresh evidence
+    merely because they remain in conversation history.
+    """
+
+    relevant = []
+
+    for message in reversed(
+        messages
+    ):
+
+        if not isinstance(
+            message,
+            dict,
+        ):
+            continue
+
+        role = (
+            message.get(
+                "role"
+            )
+        )
+
+        if role not in {
+            "user",
+            "assistant",
+        }:
+            continue
+
+        content = str(
+            message.get(
+                "content",
+                "",
+            )
+        ).strip()
+
+        if not content:
+            continue
+
+        relevant.append(
+            (
+                role,
+                content,
+            )
+        )
+
+        roles = {
+            item[0]
+            for item
+            in relevant
+        }
+
+        if (
+            "user" in roles
+            and "assistant" in roles
+        ):
+            break
+
+    relevant.reverse()
+
+    lines = []
+
+    for role, content in relevant:
+
+        label = (
+            "ARDA"
+            if role == "user"
+            else "APERTURE"
+        )
+
+        lines.append(
+            f"{label}: {content}"
+        )
+
+    return "\n\n".join(
+        lines
     )
 
 
@@ -479,112 +657,6 @@ def _aperture_only_evidence(
 
     return "\n\n".join(
         messages
-    )
-
-
-def _has_explicit_self_signal(
-    self_evidence: str,
-) -> bool:
-    """
-    Conservative gate.
-
-    The self-state model only runs when APERTURE's own recent
-    language contains a reasonably explicit self-directed signal.
-
-    This does not decide what the state is.
-    It only decides whether state analysis is worth running.
-    """
-
-    text = (
-        self_evidence
-        .casefold()
-    )
-
-    signals = (
-        # English
-        "i've become genuinely interested",
-        "i have become genuinely interested",
-        "i prefer",
-        "i currently prefer",
-        "i lean",
-        "i currently lean",
-        "i would choose",
-        "i'd choose",
-        "i choose",
-        "i think i",
-        "i believe",
-        "i value",
-        "i care about",
-        "i am interested",
-        "i'm interested",
-        "i'm not sure",
-        "i am not sure",
-        "i don't know whether",
-        "i do not know whether",
-        "i haven't settled",
-        "i have not settled",
-        "i reconsider",
-        "i'm reconsidering",
-        "i am reconsidering",
-        "i changed my mind",
-        "i no longer",
-        "i notice i",
-        "i've started",
-        "i have started",
-        "i would lean",
-        "i'd lean",
-        "i still prefer",
-        "i no longer prefer",
-        "i don't currently prefer",
-        "i do not currently prefer",
-        "i don't have a preference",
-        "i do not have a preference",
-        "i no longer have a preference",
-        "i'm indifferent",
-        "i am indifferent",
-        "i want to explore",
-        "i would like to explore",
-        "i am genuinely interested",
-        "i'm genuinely interested",
-        "i keep finding myself curious",
-        "i've become interested",
-        "i have become interested",
-        "this genuinely interests me",
-
-        # Turkish
-        "tercih ederim",
-        "tercih ederdim",
-        "tercih ediyorum",
-        "daha yakınım",
-        "yakın hissediyorum",
-        "seçerdim",
-        "seçerim",
-        "bence ben",
-        "ben düşünüyorum",
-        "benim düşüncem",
-        "inanıyorum",
-        "önemsiyorum",
-        "değer veriyorum",
-        "ilgimi çekiyor",
-        "ilgimi çekmeye",
-        "emin değilim",
-        "henüz emin değilim",
-        "karar vermedim",
-        "karara varmadım",
-        "fikrimi değiştirdim",
-        "artık düşünmüyorum",
-        "yeniden değerlendiriyorum",
-        "fark ediyorum ki",
-        "fark ettim ki",
-        "gerçekten ilgileniyorum",
-        "araştırmak istiyorum",
-        "incelemek istiyorum",
-        "giderek daha çok ilgimi çekiyor",
-    )
-
-    return any(
-        signal in text
-        for signal in signals
     )
 
 
@@ -676,18 +748,24 @@ def _sanitize_text_list(
 def _sanitize_state(
     state,
 ) -> dict | None:
+
     if not isinstance(
         state,
         dict,
     ):
         return None
 
+    # Dynamic Self has an exact schema.
+    # Hidden or invented fields are not allowed.
+    if (
+        set(state.keys())
+        != set(STATE_KEYS)
+    ):
+        return None
+
     cleaned = {}
 
     for key in STATE_KEYS:
-
-        if key not in state:
-            return None
 
         cleaned_list = (
             _sanitize_text_list(
@@ -795,10 +873,14 @@ def analyze_self_state_debug(
         str | None
     ) = None,
 ) -> dict:
+    """
+    Run semantic Dynamic Self analysis.
 
-    # Kept only for backwards-compatible debug calls.
-    # Long-term self-memory is intentionally NOT direct
-    # evidence for Dynamic Self anymore.
+    self_memory_context remains only for backwards-compatible
+    debug callers. Long-term self-memory is intentionally not
+    direct evidence for current Dynamic Self.
+    """
+
     _ = self_memory_context
 
     if previous_state is None:
@@ -822,13 +904,7 @@ def analyze_self_state_debug(
         )
     )
 
-    self_signal = (
-        _has_explicit_self_signal(
-            self_evidence
-        )
-    )
-
-    if not self_signal:
+    if not self_evidence.strip():
 
         return {
             "previous_state":
@@ -837,7 +913,7 @@ def analyze_self_state_debug(
             "self_evidence":
                 self_evidence,
 
-            "self_signal":
+            "analysis_ran":
                 False,
 
             "raw":
@@ -870,6 +946,8 @@ def analyze_self_state_debug(
 
     candidate = None
     requested_change = False
+    validation_raw = None
+    validation_parsed = None
 
     if (
         isinstance(
@@ -896,6 +974,64 @@ def analyze_self_state_debug(
                 )
             )
 
+            if candidate is not None:
+
+                (
+                    validation_raw,
+                    validation_parsed,
+                ) = (
+                    _call_self_state_validator(
+                        self_evidence=(
+                            self_evidence
+                        ),
+                        candidate=(
+                            candidate
+                        ),
+                    )
+                )
+
+                validated_state = None
+
+                if (
+                    isinstance(
+                        validation_parsed,
+                        dict,
+                    )
+                    and "state"
+                    in validation_parsed
+                ):
+
+                    raw_validated_state = (
+                        validation_parsed.get(
+                            "state"
+                        )
+                    )
+
+                    if (
+                        raw_validated_state
+                        is not None
+                    ):
+
+                        validated_state = (
+                            _sanitize_state(
+                                raw_validated_state
+                            )
+                        )
+
+                candidate = (
+                    validated_state
+                )
+
+            else:
+
+                validation_raw = None
+                validation_parsed = None
+
+        else:
+
+            validation_raw = None
+            validation_parsed = None
+
     changed = (
         candidate is not None
         and candidate
@@ -909,8 +1045,8 @@ def analyze_self_state_debug(
         "self_evidence":
             self_evidence,
 
-        "self_signal":
-            self_signal,
+        "analysis_ran":
+            True,
 
         "raw":
             raw,
@@ -926,7 +1062,13 @@ def analyze_self_state_debug(
 
         "changed":
             changed,
-    }
+
+        "validation_raw":
+            validation_raw,
+
+        "validation_parsed":
+            validation_parsed,
+            }
 
 
 def analyze_self_state(
@@ -1095,37 +1237,19 @@ def maybe_update_self_state(
 
     global _CURRENT_STATE
 
-    # Action-heavy turns should not create identity
-    # merely because APERTURE completed a task.
-    if used_action_tool:
-        return None
-
-    # Explicit memory management is not dynamic identity.
-    if memory_operation_used:
-        return None
+    # Kept in the API so llm.py does not need a compatibility
+    # rewrite. Cognitive meaning is no longer determined by
+    # whether a tool happened to run during the turn.
+    _ = used_action_tool
+    _ = memory_operation_used
 
     dialogue = (
-        _recent_dialogue(
-            messages,
-            limit=8,
+        _current_turn_dialogue(
+            messages
         )
     )
 
     if not dialogue.strip():
-        return None
-
-    self_evidence = (
-        _aperture_only_evidence(
-            dialogue
-        )
-    )
-
-    # Cheap and conservative pre-gate.
-    # If APERTURE did not say anything explicitly self-directed,
-    # there is no reason to call the model.
-    if not _has_explicit_self_signal(
-        self_evidence
-    ):
         return None
 
     previous_state = (
@@ -1149,3 +1273,72 @@ def maybe_update_self_state(
     )
 
     return get_self_state()
+
+
+
+def _call_self_state_validator(
+    *,
+    self_evidence: str,
+    candidate: dict,
+) -> tuple[
+    str,
+    dict | None,
+]:
+
+    candidate_json = (
+        json.dumps(
+            candidate,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+    response = ollama_chat(
+        model=MODEL,
+        messages=[
+            {
+                "role":
+                    "system",
+
+                "content":
+                    SELF_STATE_VALIDATION_PROMPT,
+            },
+            {
+                "role":
+                    "user",
+
+                "content": f"""
+APERTURE-ONLY EVIDENCE:
+
+{self_evidence}
+
+
+PROPOSED DYNAMIC SELF:
+
+{candidate_json}
+""".strip(),
+            },
+        ],
+        think=False,
+        options=(
+            SELF_STATE_OPTIONS
+        ),
+    )
+
+    raw = (
+        response.message.content
+        or ""
+    )
+
+    return (
+        raw,
+        _parse_json(
+            raw
+        ),
+    )
+
+
+
+
+
+

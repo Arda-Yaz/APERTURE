@@ -1,7 +1,11 @@
 from ollama import chat as ollama_chat
 
 from persona import build_persona_context
-from reflection import maybe_reflect
+
+from reflection import (
+    maybe_reflect,
+    maybe_consolidate_self_state,
+)
 
 from self_state import (
     build_self_state_context,
@@ -43,8 +47,7 @@ from memory import (
     save_self_memory,
     search_memory,
     forget_memory,
-    build_memory_context,
-    build_relevant_memory_context,
+    build_actor_memory_context,
 )
 
 
@@ -280,18 +283,13 @@ def inject_runtime_context(
         build_self_state_context()
     )
 
-    memory_context = (
-        build_memory_context()
-    )
-
     relationship_context = (
         build_relationship_context()
     )
 
-    relevant_memory_context = (
-        build_relevant_memory_context(
+    actor_memory_context = (
+        build_actor_memory_context(
             query=user_message,
-            limit=8,
         )
     )
 
@@ -302,9 +300,7 @@ def inject_runtime_context(
         + "\n\n"
         + relationship_context
         + "\n\n"
-        + memory_context
-        + "\n\n"
-        + relevant_memory_context
+        + actor_memory_context
     )
 
     if (
@@ -433,6 +429,25 @@ def finalize_answer(
                 self_state_result
             ),
         )
+
+        self_consolidation_result = (
+            maybe_consolidate_self_state(
+                turn_id=turn_id,
+                state_update=(
+                    self_state_result
+                ),
+                assistant_evidence=(
+                    answer
+                ),
+            )
+        )
+
+        if self_consolidation_result:
+
+            print(
+                "\n[SELF_CONSOLIDATION] "
+                f"{self_consolidation_result}"
+            )
 
 
 

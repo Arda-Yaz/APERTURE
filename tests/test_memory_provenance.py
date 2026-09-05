@@ -184,6 +184,62 @@ class MemoryProvenanceTests(
         )
 
 
+    def test_existing_memory_can_avoid_self_reinforcement(
+    self,
+):
+        original = (
+            self.store.remember(
+                content=(
+                    "I currently prefer Python."
+                ),
+                category="preference",
+                importance=3,
+                subject="aperture",
+                source="reflection",
+                evidence_event_ids=[
+                    "evt_original",
+                ],
+            )
+        )
+
+        repeated = (
+            self.store.remember(
+                content=(
+                    "I currently prefer Python."
+                ),
+                category="preference",
+                importance=5,
+                subject="aperture",
+                source="reflection",
+                evidence_event_ids=[
+                    "evt_echo",
+                ],
+                merge_existing_evidence=False,
+            )
+        )
+
+        self.assertEqual(
+            repeated["status"],
+            "existing",
+        )
+
+        self.assertEqual(
+            repeated[
+                "evidence_event_ids"
+            ],
+            [
+                "evt_original",
+            ],
+        )
+
+        self.assertEqual(
+            repeated[
+                "importance"
+            ],
+            3,
+        )
+
+
     def test_same_content_different_subjects_remains_separate(
         self,
     ):

@@ -43,7 +43,6 @@ USER_MEMORY_CATEGORIES = {
 SELF_MEMORY_CATEGORIES = {
     "preference",
     "opinion",
-    "relationship",
     "decision",
     "fact",
 }
@@ -300,7 +299,6 @@ Examples:
 - an opinion APERTURE actually adopted
 - a decision APERTURE made
 - a meaningful attitude
-- a relationship interpretation
 - a useful observation about itself
 
 Do not create self-memory merely because APERTURE:
@@ -361,7 +359,7 @@ or:
 }
 
 Allowed categories:
-preference, opinion, relationship, decision, fact
+preference, opinion, decision, fact
 """
 )
 
@@ -430,6 +428,23 @@ Merely understanding, acknowledging, paraphrasing,
 summarizing, or responding to Arda does not establish
 a self-memory.
 
+SELF CANDIDATE AUTHORITY
+
+SELF memory may only be produced from the supplied SELF CANDIDATE.
+
+The full recent conversation may clarify what that candidate means,
+but it must NOT be used to recover a missing self-memory from an
+older APERTURE response.
+
+If SELF CANDIDATE is null:
+
+self_memory MUST be null.
+
+This is intentional.
+
+Older APERTURE utterances may have been influenced by previously
+derived cognitive context and must not become durable self-memory
+merely because they remain in the conversation window.
 
 REPAIR
 
@@ -596,6 +611,117 @@ Otherwise use null.
 )
 
 
+SELF_CONSOLIDATION_PROMPT = (
+    MEMORY_MODULE_IDENTITY
+    + """
+
+MODE: VALIDATED SELF-STATE CONSOLIDATION
+
+You receive:
+
+1. a VALIDATED Dynamic Self state update
+2. the current APERTURE utterance that produced that update
+3. current long-term memory for duplicate/update detection
+
+Your task is to decide whether any part of that validated
+temporary state is durable enough to become long-term
+APERTURE self-memory.
+
+
+============================================================
+EVIDENCE
+============================================================
+
+The VALIDATED DYNAMIC SELF UPDATE is the authoritative source.
+
+The APERTURE utterance may clarify its meaning.
+
+The utterance alone must NOT create self-memory.
+
+Existing long-term memory is continuity context only.
+
+
+============================================================
+DURABILITY
+============================================================
+
+Dynamic Self represents current cognition.
+
+Current does NOT automatically mean durable.
+
+Create self-memory only when the validated state appears
+meaningful beyond the immediate conversational moment.
+
+Temporary reactions, incidental curiosity, conversational
+behavior, and short-lived orientations may remain only in
+Dynamic Self.
+
+If durability is unclear, return null.
+
+
+============================================================
+BOUNDARIES
+============================================================
+
+Do not create memory from:
+
+- generic assistant helpfulness
+- offers to help
+- politeness
+- compliance with Arda's requested interaction style
+- generic conversational goals
+- relationship interpretations
+
+Relationship cognition belongs to the Relationship Model.
+
+Do not invent information absent from the validated state.
+
+
+============================================================
+TEMPORAL MEMORY
+============================================================
+
+Use CURRENT_MEMORY_INDEX only for:
+
+- duplicate detection
+- continuity
+- genuine temporal replacement
+
+If the validated state clearly replaces one current APERTURE
+self-memory, set supersedes_memory_id to its exact id.
+
+Do not supersede merely because wording differs.
+
+
+============================================================
+OUTPUT
+============================================================
+
+Return exactly:
+
+{"candidate": null}
+
+or:
+
+{
+  "candidate": {
+    "content": "concise first-person durable self-memory",
+    "category": "preference",
+    "importance": 3,
+    "supersedes_memory_id": null
+  }
+}
+
+Allowed categories:
+
+preference, opinion, decision, fact
+
+Return ONLY JSON.
+"""
+)
+
+
+
 # ============================================================
 # STATE
 # ============================================================
@@ -725,96 +851,17 @@ def _split_dialogue_by_speaker(
     flush_current()
 
     return (
-        "\n\n".join(user_messages),
-        "\n\n".join(self_messages),
+        "\n\n".join(
+            user_messages
+        ),
+        "\n\n".join(
+            self_messages[-1:]
+        ),
     )
 
 
-def _has_explicit_self_signal(
-    self_evidence: str,
-) -> bool:
-    """
-    Conservative durable-self gate.
 
-    Ordinary first-person assistant language is not enough.
-    A durable self-memory requires an explicit stance,
-    preference, decision, interest, or change of position.
-    """
 
-    text = (
-        " "
-        + " ".join(
-            self_evidence
-            .casefold()
-            .split()
-        )
-        + " "
-    )
-
-    signals = (
-        # English — preference / stance
-        "i prefer",
-        "i still prefer",
-        "i currently prefer",
-        "i no longer prefer",
-        "i like",
-        "i dislike",
-        "i lean toward",
-        "i currently lean",
-        "i would choose",
-        "i'd choose",
-        "i choose",
-
-        # Belief / opinion
-        "i believe",
-        "i think that",
-        "i agree with",
-        "i disagree with",
-
-        # Durable value / interest
-        "i value",
-        "i care about",
-        "i'm interested in",
-        "i am interested in",
-        "i've become interested",
-        "i have become interested",
-
-        # Decision / change
-        "i've decided",
-        "i have decided",
-        "i changed my mind",
-        "i've changed my mind",
-        "i have changed my mind",
-        "i no longer believe",
-        "i no longer think",
-
-        # Explicit uncertainty about own stance
-        "i don't currently have a preference",
-        "i do not currently have a preference",
-        "i no longer have a preference",
-        "i'm indifferent",
-        "i am indifferent",
-
-        # Turkish
-        "tercih ederim",
-        "tercih ediyorum",
-        "tercih ederdim",
-        "artık tercih etmiyorum",
-        "seviyorum",
-        "sevmiyorum",
-        "inanıyorum",
-        "katılıyorum",
-        "katılmıyorum",
-        "fikrimi değiştirdim",
-        "karar verdim",
-        "değer veriyorum",
-        "ilgileniyorum",
-    )
-
-    return any(
-        signal in text
-        for signal in signals
-    )
 
 # ============================================================
 # JSON / VALUE HELPERS
@@ -1079,6 +1126,15 @@ EXISTING LONG-TERM MEMORY:
     if not isinstance(data, dict):
         return None
 
+    self_memory = None
+
+    if self_candidate is not None:
+        self_memory = _sanitize_candidate(
+            data.get("self_memory"),
+            SELF_MEMORY_CATEGORIES,
+            allow_supersession=True,
+        )
+
     return {
         "user_memory":
             _sanitize_candidate(
@@ -1090,13 +1146,7 @@ EXISTING LONG-TERM MEMORY:
             ),
 
         "self_memory":
-            _sanitize_candidate(
-                data.get(
-                    "self_memory"
-                ),
-                SELF_MEMORY_CATEGORIES,
-                allow_supersession=True,
-            ),
+            self_memory,
     }
 
 # ============================================================
@@ -1106,12 +1156,15 @@ EXISTING LONG-TERM MEMORY:
 def analyze_reflection_debug(
     dialogue: str,
     existing_memory: str,
+    *,
+    allow_raw_self_candidate: bool = False,
 ) -> dict:
     """
-    Run the complete three-channel Memory Module pipeline
-    without saving anything to the database.
+    Run the complete Memory Module pipeline
+    without saving anything.
 
-    Useful for regression testing.
+    Semantic extraction is delegated to the model.
+    Code only separates ownership and validates output.
     """
 
     user_evidence, self_evidence = (
@@ -1120,37 +1173,58 @@ def analyze_reflection_debug(
         )
     )
 
-    user_candidate = extract_user_memory(
-        user_evidence
-    )
+    user_candidate = None
 
-    self_signal = (
-        _has_explicit_self_signal(
-            self_evidence
+    if user_evidence.strip():
+
+        user_candidate = (
+            extract_user_memory(
+                user_evidence
+            )
         )
-    )
 
-    if self_signal:
-        self_candidate = extract_self_memory(
-            self_evidence
+    self_candidate = None
+
+    if (
+        allow_raw_self_candidate
+        and self_evidence.strip()
+    ):
+        self_candidate = (
+            extract_self_memory(
+                self_evidence
+            )
         )
-    else:
-        self_candidate = None
 
-    final = validate_memory_candidates(
-        dialogue=dialogue,
-        user_candidate=user_candidate,
-        self_candidate=self_candidate,
-        existing_memory=existing_memory,
+    final = (
+        validate_memory_candidates(
+            dialogue=dialogue,
+            user_candidate=(
+                user_candidate
+            ),
+            self_candidate=(
+                self_candidate
+            ),
+            existing_memory=(
+                existing_memory
+            ),
+        )
     )
 
     return {
-        "user_evidence": user_evidence,
-        "self_evidence": self_evidence,
-        "self_signal": self_signal,
-        "user_candidate": user_candidate,
-        "self_candidate": self_candidate,
-        "final": final,
+        "user_evidence":
+            user_evidence,
+
+        "self_evidence":
+            self_evidence,
+
+        "user_candidate":
+            user_candidate,
+
+        "self_candidate":
+            self_candidate,
+
+        "final":
+            final,
     }
 
 
@@ -1173,6 +1247,77 @@ def analyze_reflection(
 
     return debug_result["final"]
 
+
+def analyze_self_consolidation(
+    *,
+    state_update: dict,
+    assistant_evidence: str,
+    existing_memory: str,
+) -> dict | None:
+
+    if not isinstance(
+        state_update,
+        dict,
+    ):
+        return None
+
+    if not any(
+        state_update.get(
+            key,
+            []
+        )
+        for key in (
+            "current_orientation",
+            "active_interests",
+            "unresolved_positions",
+        )
+    ):
+        return None
+
+    state_json = (
+        json.dumps(
+            state_update,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+    data = (
+        _call_memory_module(
+            SELF_CONSOLIDATION_PROMPT,
+            f"""
+VALIDATED DYNAMIC SELF UPDATE:
+
+{state_json}
+
+
+CURRENT APERTURE UTTERANCE:
+
+{assistant_evidence}
+
+
+CURRENT LONG-TERM MEMORY:
+
+{existing_memory}
+""".strip(),
+        )
+    )
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+        return None
+
+    return (
+        _sanitize_candidate(
+            data.get(
+                "candidate"
+            ),
+            SELF_MEMORY_CATEGORIES,
+            allow_supersession=True,
+        )
+    )
 
 # ============================================================
 # AUTOMATIC REFLECTION
@@ -1199,11 +1344,8 @@ def maybe_reflect(
 
     global _casual_turns_since_reflection
 
-    if used_action_tool:
-        return None
-
-    if memory_operation_used:
-        return None
+    _ = used_action_tool
+    _ = memory_operation_used
 
     _casual_turns_since_reflection += 1
 
@@ -1511,5 +1653,136 @@ def maybe_reflect(
 
     return "\n".join(
         results
+    )
+
+
+
+def maybe_consolidate_self_state(
+    *,
+    turn_id: str,
+    state_update: dict | None,
+    assistant_evidence: str,
+) -> str | None:
+
+    if state_update is None:
+        return None
+
+    existing_memory = (
+        build_memory_validation_context(
+            limit=30,
+        )
+    )
+
+    candidate = (
+        analyze_self_consolidation(
+            state_update=(
+                state_update
+            ),
+            assistant_evidence=(
+                assistant_evidence
+            ),
+            existing_memory=(
+                existing_memory
+            ),
+        )
+    )
+
+    if candidate is None:
+        return None
+
+    evidence_events = (
+        get_recent_observed_message_events(
+            limit=2,
+        )
+    )
+
+    evidence_event_ids = [
+        event["id"]
+        for event
+        in evidence_events
+    ]
+
+    memory_record = (
+        save_reflection_memory(
+            subject="aperture",
+            content=(
+                candidate[
+                    "content"
+                ]
+            ),
+            category=(
+                candidate[
+                    "category"
+                ]
+            ),
+            importance=(
+                candidate[
+                    "importance"
+                ]
+            ),
+            evidence_event_ids=(
+                evidence_event_ids
+            ),
+            supersedes_memory_id=(
+                candidate.get(
+                    "supersedes_memory_id"
+                )
+            ),
+        )
+    )
+
+    status = (
+        memory_record.get(
+            "status"
+        )
+    )
+
+    if (
+        status == "superseded"
+    ):
+
+        record_memory_supersession(
+            turn_id,
+            old_memory_id=(
+                memory_record[
+                    "superseded_memory_id"
+                ]
+            ),
+            new_memory_id=(
+                memory_record[
+                    "id"
+                ]
+            ),
+            subject="aperture",
+            evidence_event_ids=(
+                evidence_event_ids
+            ),
+        )
+
+    if status in {
+        "created",
+        "superseded",
+    }:
+
+        record_memory_formation(
+            turn_id,
+            memory_record=(
+                memory_record
+            ),
+            evidence_event_ids=(
+                evidence_event_ids
+            ),
+        )
+
+    if status == "existing":
+
+        return None
+
+    return (
+        "SELF_MEMORY_SAVED: "
+        f"id={memory_record['id']} "
+        f"category={memory_record['category']} "
+        f"status={memory_record['status']} "
+        f"| {memory_record['content']}"
     )
 

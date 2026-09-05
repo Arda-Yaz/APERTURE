@@ -637,6 +637,7 @@ class MemoryStore:
         source: str = "conversation",
         subject: str = "user",
         evidence_event_ids=None,
+        merge_existing_evidence: bool = True,
     ) -> dict:
 
         (
@@ -682,6 +683,57 @@ class MemoryStore:
             # =================================================
 
             if existing:
+                if (
+                    existing
+                    and not
+                    merge_existing_evidence
+                ):
+
+                    return {
+                        "status":
+                            "existing",
+
+                        "id":
+                            existing["id"],
+
+                        "content":
+                            existing["content"],
+
+                        "category":
+                            existing["category"],
+
+                        "importance":
+                            existing["importance"],
+
+                        "source":
+                            existing["source"],
+
+                        "subject":
+                            existing["subject"],
+
+                        "evidence_event_ids":
+                            _decode_evidence_event_ids(
+                                existing[
+                                    "evidence_event_ids_json"
+                                ]
+                            ),
+
+                        "valid_from":
+                            existing["valid_from"],
+
+                        "valid_until":
+                            existing["valid_until"],
+
+                        "supersedes_memory_id":
+                            existing[
+                                "supersedes_memory_id"
+                            ],
+
+                        "superseded_memory_id":
+                            None,
+                    }                
+
+
 
                 new_importance = max(
                     importance,
@@ -1673,6 +1725,9 @@ def save_reflection_memory(
         evidence_event_ids=(
             evidence_event_ids
         ),
+        merge_existing_evidence=(
+            subject == "user"
+        ),
     )
 
 
@@ -1891,5 +1946,104 @@ def build_memory_context(
 
     return "\n".join(lines)
 
+
+def build_actor_memory_context(
+    query: str,
+    *,
+    self_limit: int = 6,
+    relevant_limit: int = 10,
+) -> str:
+    """
+    Build one de-duplicated memory context for the actor.
+
+    A small set of APERTURE self-memory provides continuity.
+    Query-relevant memory provides situational context.
+
+    The same memory is included only once.
+    """
+
+    self_memories = (
+        _STORE.top_memories_for_subject(
+            subject="aperture",
+            limit=self_limit,
+        )
+    )
+
+    relevant_memories = (
+        _STORE.search(
+            query=query,
+            limit=relevant_limit,
+        )
+    )
+
+    memories = []
+    seen_ids = set()
+
+    for memory in (
+        list(self_memories)
+        + list(relevant_memories)
+    ):
+
+        memory_id = str(
+            memory.get(
+                "id",
+                "",
+            )
+        ).strip()
+
+        if not memory_id:
+            continue
+
+        if memory_id in seen_ids:
+            continue
+
+        seen_ids.add(
+            memory_id
+        )
+
+        memories.append(
+            memory
+        )
+
+    if not memories:
+
+        return (
+            "<ACTOR_MEMORY>\n"
+            "No relevant prior memory available.\n"
+            "</ACTOR_MEMORY>"
+        )
+
+    lines = [
+        "<ACTOR_MEMORY>",
+        (
+            "This is prior continuity context, "
+            "not current-conversation evidence."
+        ),
+        (
+            "It may inform the response, but repeating a "
+            "memory does not by itself make that memory "
+            "newer, stronger, or newly discovered."
+        ),
+        (
+            "The subject tag identifies ownership."
+        ),
+        "",
+    ]
+
+    for memory in memories:
+
+        lines.append(
+            f"- [{memory['subject']}] "
+            f"[{memory['category']}] "
+            f"{memory['content']}"
+        )
+
+    lines.append(
+        "</ACTOR_MEMORY>"
+    )
+
+    return "\n".join(
+        lines
+    )
 
 

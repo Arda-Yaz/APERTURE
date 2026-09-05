@@ -22,15 +22,17 @@ sys.path.insert(
 )
 
 
-from relationship import (  # noqa: E402
+from unittest.mock import patch
+
+from relationship import (
     STATE_KEYS,
-    _has_relationship_signal,
     _sanitize_state,
+    analyze_relationship_debug,
     build_relationship_context,
     empty_relationship_state,
     get_relationship_state,
+    maybe_update_relationship,
     reset_relationship_state,
-    _enforce_evidence_boundaries,
 )
 
 
@@ -82,151 +84,6 @@ class RelationshipStateTests(
                 "open_questions":
                     [],
             },
-        )
-
-    def test_compliance_does_not_create_relationship_interpretation(
-        self,
-    ):
-
-        candidate = {
-            "interaction_preferences": [
-                (
-                    "Arda asked APERTURE to "
-                    "challenge genuine disagreements."
-                )
-            ],
-            "established_patterns":
-                [],
-            "relationship_interpretations": [
-                (
-                    "APERTURE interprets this as "
-                    "a preference for thoughtful dialogue."
-                )
-            ],
-            "open_questions":
-                [],
-        }
-
-        dialogue = """
-    ARDA: When you disagree with me, challenge my reasoning.
-
-    APERTURE: Understood. I will challenge your reasoning when I genuinely disagree.
-    """.strip()
-
-        cleaned = (
-            _enforce_evidence_boundaries(
-                candidate,
-                dialogue,
-            )
-        )
-        assert cleaned is not None
-
-        self.assertEqual(
-            cleaned[
-                "interaction_preferences"
-            ],
-            candidate[
-                "interaction_preferences"
-            ],
-        )
-
-        self.assertEqual(
-            cleaned[
-                "relationship_interpretations"
-            ],
-            [],
-        )
-
-
-    def test_explicit_relationship_interpretation_is_preserved(
-        self,
-    ):
-
-        candidate = {
-            "interaction_preferences":
-                [],
-            "established_patterns":
-                [],
-            "relationship_interpretations": [
-                (
-                    "I currently see our discussions "
-                    "as increasingly exploratory."
-                )
-            ],
-            "open_questions":
-                [],
-        }
-
-        dialogue = """
-    APERTURE: I think our discussions have become increasingly exploratory.
-    """.strip()
-
-        cleaned = (
-            _enforce_evidence_boundaries(
-                candidate,
-                dialogue,
-            )
-        )
-        assert cleaned is not None
-
-        self.assertEqual(
-            cleaned[
-                "relationship_interpretations"
-            ],
-            candidate[
-                "relationship_interpretations"
-            ],
-        )
-
-
-    
-
-    def test_user_fact_is_not_relationship_signal(
-        self,
-    ):
-
-        dialogue = """
-ARDA: I usually prefer working late at night.
-
-APERTURE: That can be useful when there are fewer distractions.
-""".strip()
-
-        self.assertFalse(
-            _has_relationship_signal(
-                dialogue
-            )
-        )
-
-
-    def test_explicit_interaction_preference_is_signal(
-        self,
-    ):
-
-        dialogue = """
-ARDA: When you disagree with me, challenge me instead of just agreeing.
-
-APERTURE: Understood.
-""".strip()
-
-        self.assertTrue(
-            _has_relationship_signal(
-                dialogue
-            )
-        )
-
-
-    def test_relationship_interpretation_is_signal(
-        self,
-    ):
-
-        dialogue = """
-APERTURE: I think our conversations are becoming more exploratory.
-""".strip()
-
-        self.assertTrue(
-            _has_relationship_signal(
-                dialogue
-            )
         )
 
 
@@ -334,6 +191,171 @@ APERTURE: I think our conversations are becoming more exploratory.
             get_relationship_state(),
             empty_relationship_state(),
         )
+
+
+
+
+
+@patch(
+    "relationship._call_relationship_module"
+)
+def test_ordinary_fact_can_semantically_resolve_to_null(
+    self,
+    mock_call,
+):
+
+    mock_call.return_value = (
+        '{"state": null}',
+        {
+            "state":
+                None
+        },
+    )
+
+    dialogue = """
+ARDA: I usually prefer working late at night.
+
+APERTURE: That can be useful when there are fewer distractions.
+""".strip()
+
+    result = (
+        analyze_relationship_debug(
+            dialogue=dialogue,
+            previous_state=(
+                empty_relationship_state()
+            ),
+            memory_context=(
+                "<RELEVANT_MEMORY />"
+            ),
+        )
+    )
+
+    mock_call.assert_called_once()
+
+    self.assertTrue(
+        result[
+            "analysis_ran"
+        ]
+    )
+
+    self.assertIsNone(
+        result[
+            "candidate"
+        ]
+    )
+
+
+@patch(
+    "relationship._call_relationship_module"
+)
+def test_semantic_relationship_candidate_is_accepted(
+    self,
+    mock_call,
+):
+
+    candidate = {
+        "interaction_preferences": [
+            (
+                "Arda wants genuine disagreement "
+                "to be explained rather than hidden."
+            )
+        ],
+
+        "established_patterns":
+            [],
+
+        "relationship_interpretations":
+            [],
+
+        "open_questions":
+            [],
+    }
+
+    mock_call.return_value = (
+        "{}",
+        {
+            "state":
+                candidate
+        },
+    )
+
+    result = (
+        analyze_relationship_debug(
+            dialogue=(
+                "ARDA: Challenge me when you disagree."
+            ),
+            previous_state=(
+                empty_relationship_state()
+            ),
+            memory_context=(
+                "<RELEVANT_MEMORY />"
+            ),
+        )
+    )
+
+    self.assertEqual(
+        result[
+            "candidate"
+        ],
+        candidate,
+    )
+
+
+@patch(
+    "relationship.analyze_relationship_debug"
+)
+def test_action_turn_is_not_relationship_skipped(
+    self,
+    mock_analysis,
+):
+
+    mock_analysis.return_value = {
+        "previous_state":
+            empty_relationship_state(),
+
+        "analysis_ran":
+            True,
+
+        "raw":
+            None,
+
+        "parsed":
+            None,
+
+        "requested_change":
+            False,
+
+        "candidate":
+            None,
+
+        "changed":
+            False,
+    }
+
+    messages = [
+        {
+            "role":
+                "user",
+
+            "content":
+                "Do this task, and be direct with me.",
+        },
+        {
+            "role":
+                "assistant",
+
+            "content":
+                "Done.",
+        },
+    ]
+
+    maybe_update_relationship(
+        messages,
+        used_action_tool=True,
+        memory_operation_used=False,
+    )
+
+    mock_analysis.assert_called_once()
 
 
 if __name__ == "__main__":

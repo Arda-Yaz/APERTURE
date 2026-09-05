@@ -506,6 +506,99 @@ Return ONLY JSON.
 """.strip()
 
 
+RELATIONSHIP_VALIDATION_PROMPT = """
+You are an internal validation process within APERTURE.
+
+Validate a proposed Relationship State update.
+
+The proposed state is not authoritative.
+
+Do not create new relationship information.
+
+
+============================================================
+EVIDENCE OWNERSHIP
+============================================================
+
+interaction_preferences
+
+Must be supported by something Arda actually communicates
+about how he wants APERTURE to interact with him.
+
+
+established_patterns
+
+Require recurring interaction evidence.
+
+Do not infer a recurring pattern from one interaction.
+
+
+relationship_interpretations
+
+Require APERTURE itself to directly express an interpretation
+of the relationship or interaction.
+
+Do not manufacture relationship meaning from:
+
+- compliance with Arda's interaction preference
+- promises to behave helpfully
+- politeness
+- generic collaborative language
+- ordinary assistant commitments
+
+For example:
+
+"I will challenge you when I disagree."
+
+may support Arda's interaction preference.
+
+It does NOT by itself establish:
+
+"Our relationship values critical examination."
+
+
+open_questions
+
+Must represent an actually unresolved interaction question,
+not merely something that could theoretically be uncertain.
+
+
+============================================================
+AUTHORITY
+============================================================
+
+You may:
+
+- preserve supported candidate items
+- remove unsupported candidate items
+- return null if nothing valid remains
+
+You may NOT add an item absent from the proposed state.
+
+
+============================================================
+OUTPUT
+============================================================
+
+Return:
+
+{
+  "state": {
+    "interaction_preferences": [],
+    "established_patterns": [],
+    "relationship_interpretations": [],
+    "open_questions": []
+  }
+}
+
+or:
+
+{"state": null}
+
+Return ONLY JSON.
+""".strip()
+
+
 # ============================================================
 # STATE
 # ============================================================
@@ -578,259 +671,6 @@ def _recent_dialogue(
 
     return "\n\n".join(
         relevant[-limit:]
-    )
-
-
-def _aperture_only_evidence(
-    dialogue: str,
-) -> str:
-
-    messages = []
-
-    current_speaker = None
-    current_lines = []
-
-    def flush_current():
-        nonlocal current_speaker
-        nonlocal current_lines
-
-        if (
-            current_speaker == "aperture"
-            and current_lines
-        ):
-            content = " ".join(
-                line
-                for line in current_lines
-                if line
-            ).strip()
-
-            if content:
-                messages.append(
-                    content
-                )
-
-        current_speaker = None
-        current_lines = []
-
-    for raw_line in (
-        dialogue.splitlines()
-    ):
-
-        line = raw_line.strip()
-
-        if line.startswith("ARDA:"):
-            flush_current()
-
-            current_speaker = "arda"
-
-            current_lines = [
-                line[
-                    len("ARDA:"):
-                ].strip()
-            ]
-
-            continue
-
-        if line.startswith(
-            "APERTURE:"
-        ):
-            flush_current()
-
-            current_speaker = (
-                "aperture"
-            )
-
-            current_lines = [
-                line[
-                    len("APERTURE:"):
-                ].strip()
-            ]
-
-            continue
-
-        if (
-            current_speaker
-            and line
-        ):
-            current_lines.append(
-                line
-            )
-
-    flush_current()
-
-    return "\n\n".join(
-        messages
-    )
-
-
-def _has_explicit_relationship_interpretation_signal(
-    self_evidence: str,
-) -> bool:
-    """
-    Relationship interpretations require explicit
-    APERTURE-authored relational interpretation.
-
-    Merely agreeing to Arda's requested interaction style
-    is not enough.
-    """
-
-    text = (
-        " "
-        + " ".join(
-            self_evidence
-            .casefold()
-            .split()
-        )
-        + " "
-    )
-
-    signals = (
-        "i think our ",
-        "i see our ",
-        "i currently see our ",
-        "i notice our ",
-        "i've noticed our ",
-        "i have noticed our ",
-        "i value the way arda",
-        "i appreciate the way arda",
-        "i'm not sure how our ",
-        "i am not sure how our ",
-
-        "konuşmalarımızı ",
-        "sohbetlerimizi ",
-        "etkileşimimizi ",
-        "arda'nın beni ",
-        "arda'nın bana ",
-    )
-
-    return any(
-        signal in text
-        for signal in signals
-    )
-
-
-def _enforce_evidence_boundaries(
-    state: dict | None,
-    dialogue: str,
-) -> dict | None:
-
-    if state is None:
-        return None
-
-    cleaned = deepcopy(
-        state
-    )
-
-    self_evidence = (
-        _aperture_only_evidence(
-            dialogue
-        )
-    )
-
-    if (
-        cleaned[
-            "relationship_interpretations"
-        ]
-        and not
-        _has_explicit_relationship_interpretation_signal(
-            self_evidence
-        )
-    ):
-        cleaned[
-            "relationship_interpretations"
-        ] = []
-
-    return cleaned
-
-
-def _has_relationship_signal(
-    dialogue: str,
-) -> bool:
-    """
-    Cheap conservative gate.
-
-    This does NOT decide relationship state.
-    It only decides whether the relationship analysis
-    model is worth running.
-    """
-
-    text = (
-        " "
-        + " ".join(
-            str(dialogue)
-            .casefold()
-            .split()
-        )
-        + " "
-    )
-
-    explicit_phrases = (
-        # English — relationship framing
-        "our conversations",
-        "our conversation",
-        "our discussions",
-        "our interaction",
-        "our interactions",
-        "between us",
-        "when we talk",
-        "when we discuss",
-        "how we interact",
-
-        # English — explicit interaction preferences
-        "challenge me",
-        "disagree with me",
-        "agree with me",
-        "don't just agree",
-        "do not just agree",
-        "be honest with me",
-        "be direct with me",
-        "push back on me",
-        "push back when",
-        "call me out",
-        "question my assumptions",
-        "challenge my assumptions",
-        "how you respond to me",
-        "the way you respond to me",
-        "i prefer when you",
-        "i like when you",
-        "i don't want you to",
-        "i do not want you to",
-
-        # English — APERTURE relational interpretations
-        "i think our ",
-        "i feel our ",
-        "i see our ",
-        "i notice our ",
-        "i've noticed our ",
-        "i have noticed our ",
-        "i value the way arda",
-        "i appreciate the way arda",
-
-        # Turkish — relationship framing
-        "konuşmalarımız",
-        "sohbetlerimiz",
-        "aramızda",
-        "aramızdaki",
-        "etkileşimimiz",
-        "birlikte konuşurken",
-
-        # Turkish — explicit interaction preferences
-        "bana katılma",
-        "bana karşı çık",
-        "benimle aynı fikirde",
-        "dürüstçe karşı çık",
-        "beni sorgula",
-        "varsayımlarıma karşı çık",
-        "bana direkt ol",
-        "benimle konuşurken",
-        "bana cevap verirken",
-        "senden bana",
-    )
-
-    return any(
-        phrase in text
-        for phrase
-        in explicit_phrases
     )
 
 
@@ -1040,6 +880,70 @@ RELEVANT LONG-TERM MEMORY:
     )
 
 
+
+def _call_relationship_validator(
+    *,
+    dialogue: str,
+    candidate: dict,
+) -> tuple[
+    str,
+    dict | None,
+]:
+
+    candidate_json = (
+        json.dumps(
+            candidate,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+    response = (
+        ollama_chat(
+            model=MODEL,
+            messages=[
+                {
+                    "role":
+                        "system",
+
+                    "content":
+                        RELATIONSHIP_VALIDATION_PROMPT,
+                },
+                {
+                    "role":
+                        "user",
+
+                    "content": f"""
+CURRENT INTERACTION EVIDENCE:
+
+{dialogue}
+
+
+PROPOSED RELATIONSHIP STATE:
+
+{candidate_json}
+""".strip(),
+                },
+            ],
+            think=False,
+            options=(
+                RELATIONSHIP_OPTIONS
+            ),
+        )
+    )
+
+    raw = (
+        response.message.content
+        or ""
+    )
+
+    return (
+        raw,
+        _parse_json(
+            raw
+        ),
+    )
+
 # ============================================================
 # DEBUG / ANALYSIS
 # ============================================================
@@ -1056,6 +960,7 @@ def analyze_relationship_debug(
 ) -> dict:
 
     if previous_state is None:
+
         previous_state = (
             empty_relationship_state()
         )
@@ -1069,19 +974,13 @@ def analyze_relationship_debug(
             or empty_relationship_state()
         )
 
-    signal = (
-        _has_relationship_signal(
-            dialogue
-        )
-    )
-
-    if not signal:
+    if not dialogue.strip():
 
         return {
             "previous_state":
                 previous_state,
 
-            "relationship_signal":
+            "analysis_ran":
                 False,
 
             "raw":
@@ -1136,22 +1035,63 @@ def analyze_relationship_debug(
 
     candidate = None
 
-    if isinstance(parsed, dict) and requested_change:
+    validation_raw = None
+    validation_parsed = None
 
-        candidate = (
-            _sanitize_state(
-                parsed.get(
-                    "state"
+    if requested_change:
+
+        if isinstance(parsed, dict):
+            candidate = (
+                _sanitize_state(
+                    parsed.get(
+                        "state"
+                    )
                 )
             )
-        )
 
-        candidate = (
-            _enforce_evidence_boundaries(
-                candidate,
-                dialogue,
+        if candidate is not None:
+
+            (
+                validation_raw,
+                validation_parsed,
+            ) = (
+                _call_relationship_validator(
+                    dialogue=dialogue,
+                    candidate=candidate,
+                )
             )
-        )
+
+            validated_state = None
+
+            if (
+                isinstance(
+                    validation_parsed,
+                    dict,
+                )
+                and "state"
+                in validation_parsed
+            ):
+
+                raw_validated_state = (
+                    validation_parsed.get(
+                        "state"
+                    )
+                )
+
+                if (
+                    raw_validated_state
+                    is not None
+                ):
+
+                    validated_state = (
+                        _sanitize_state(
+                            raw_validated_state
+                        )
+                    )
+
+            candidate = (
+                validated_state
+            )
 
     changed = (
         candidate is not None
@@ -1163,7 +1103,7 @@ def analyze_relationship_debug(
         "previous_state":
             previous_state,
 
-        "relationship_signal":
+        "analysis_ran":
             True,
 
         "raw":
@@ -1180,9 +1120,13 @@ def analyze_relationship_debug(
 
         "changed":
             changed,
+
+        "validation_raw":
+            validation_raw,
+
+        "validation_parsed":
+            validation_parsed,
     }
-
-
 # ============================================================
 # PUBLIC STATE API
 # ============================================================
@@ -1298,20 +1242,11 @@ def maybe_update_relationship(
     used_action_tool: bool,
     memory_operation_used: bool,
 ) -> dict | None:
-    """
-    Update process-scoped relationship state.
-
-    Does not write long-term memory.
-    Does not create behavior instructions.
-    """
 
     global _CURRENT_STATE
 
-    if used_action_tool:
-        return None
-
-    if memory_operation_used:
-        return None
+    _ = used_action_tool
+    _ = memory_operation_used
 
     dialogue = (
         _recent_dialogue(
@@ -1320,7 +1255,7 @@ def maybe_update_relationship(
         )
     )
 
-    if not dialogue:
+    if not dialogue.strip():
         return None
 
     debug = (
@@ -1355,3 +1290,7 @@ def maybe_update_relationship(
     return (
         get_relationship_state()
     )
+
+
+
+
