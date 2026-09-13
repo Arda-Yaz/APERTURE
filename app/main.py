@@ -3,6 +3,25 @@ from llm import chat
 from experience import (
     start_episode,
     end_episode,
+    get_latest_episode_id,
+    build_episode_continuity_context,
+)
+
+from config import (
+    ENABLE_DYNAMIC_SELF,
+    ENABLE_RELATIONSHIP,
+    ENABLE_SELF_CONSOLIDATION,
+)
+
+previous_episode_id = (
+    get_latest_episode_id()
+)
+
+previous_session_context = (
+    build_episode_continuity_context(
+        previous_episode_id,
+        limit=6,
+    )
 )
 
 
@@ -54,10 +73,32 @@ Memory rules:
 ]
 
 
+if previous_session_context:
+
+    messages[0]["content"] = (
+        messages[0]["content"]
+        + "\n\n"
+        + previous_session_context
+    )
+
 start_episode(
     metadata={
-        "interface": "cli",
-        "model": "qwen3:8b",
+        "interface":
+            "cli",
+
+        "model":
+            "qwen3:8b",
+
+        "experimental_cognition": {
+            "dynamic_self":
+                ENABLE_DYNAMIC_SELF,
+
+            "relationship":
+                ENABLE_RELATIONSHIP,
+
+            "self_consolidation":
+                ENABLE_SELF_CONSOLIDATION,
+        },
     }
 )
 
