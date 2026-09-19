@@ -283,5 +283,82 @@ class ExperienceStoreTests(
         )
 
 
+    def test_recent_tool_events_are_grounded_and_ordered(
+        self,
+    ):
+
+        self.store.append_event(
+            episode_id=(
+                self.episode_id
+            ),
+            event_type=(
+                "tool_call"
+            ),
+            event_class=(
+                "observed"
+            ),
+            actor="aperture",
+            content="read_file",
+            metadata={
+                "tool_name":
+                    "read_file",
+
+                "arguments": {
+                    "path":
+                        "app/llm.py",
+                },
+            },
+        )
+
+        self.store.append_event(
+            episode_id=(
+                self.episode_id
+            ),
+            event_type=(
+                "tool_result"
+            ),
+            event_class=(
+                "observed"
+            ),
+            actor="tool",
+            content="file contents",
+            metadata={
+                "tool_name":
+                    "read_file",
+
+                "status":
+                    "ok",
+            },
+        )
+
+        events = (
+            self.store
+            .recent_tool_events(
+                limit=10
+            )
+        )
+
+        self.assertEqual(
+            [
+                event[
+                    "event_type"
+                ]
+                for event in events
+            ],
+            [
+                "tool_call",
+                "tool_result",
+            ],
+        )
+
+        self.assertEqual(
+            events[0][
+                "metadata"
+            ][
+                "tool_name"
+            ],
+            "read_file",
+        )
+
 if __name__ == "__main__":
     unittest.main()

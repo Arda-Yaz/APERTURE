@@ -35,6 +35,7 @@ from experience import (
     record_self_state_update,
     record_relationship_state_update,
     record_turn_stopped,
+    recall_recent_activity,
 )
 
 from tools import (
@@ -88,6 +89,7 @@ BASE_TOOLS = [
     save_memory,
     search_memory,
     forget_memory,
+    recall_recent_activity,
 ]
 
 
@@ -246,6 +248,9 @@ TOOL_MAP = {
     "forget_memory":
         forget_memory,
 
+    "recall_recent_activity":
+        recall_recent_activity,
+
     "save_self_memory":
         save_self_memory,
 }
@@ -256,6 +261,7 @@ NON_ACTION_TOOLS = {
     "save_self_memory",
     "search_memory",
     "forget_memory",
+    "recall_recent_activity",
 }
 
 

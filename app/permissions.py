@@ -12,6 +12,7 @@ def check_permission(tool_name: str, target: str = "") -> bool:
     "list_directory",
     "read_file",
     "search_memory",
+    "recall_recent_activity",
     }
 
     # Dış dünyada etkisi olan işlemler
@@ -30,6 +31,7 @@ def check_permission(tool_name: str, target: str = "") -> bool:
     "save_memory",
     "search_memory",
     "save_self_memory",
+    "recall_recent_activity",
 }
 
     if MODE == "AUTONOMOUS":

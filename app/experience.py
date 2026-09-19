@@ -625,6 +625,47 @@ class ExperienceStore:
             for row in rows
         ]
 
+    def recent_tool_events(
+        self,
+        *,
+        limit: int = 12,
+    ) -> list[dict]:
+
+        limit = max(
+            1,
+            min(
+                int(limit),
+                100,
+            ),
+        )
+
+        with self._connect() as connection:
+
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM events
+                WHERE event_class = 'observed'
+                AND event_type IN (
+                    'tool_call',
+                    'tool_result'
+                )
+                ORDER BY seq DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        rows = list(
+            reversed(rows)
+        )
+
+        return [
+            _row_to_event(row)
+            for row in rows
+        ]
+
+
 
     def events_by_ids(
         self,
@@ -1344,5 +1385,182 @@ def record_relationship_state_update(
             "updated_state":
                 updated_state,
         },
+    )
+
+
+def recall_recent_activity(
+    limit: int = 8,
+) -> str:
+    """
+    Read recent observed tool activity.
+
+    This is grounded execution history,
+    not long-term memory.
+    """
+
+    limit = max(
+        1,
+        min(
+            int(limit),
+            20,
+        ),
+    )
+
+    # Fetch a few extra because the current
+    # recall_recent_activity call itself is
+    # already recorded before execution.
+    events = (
+        _STORE.recent_tool_events(
+            limit=(
+                limit * 2
+                + 4
+            )
+        )
+    )
+
+    filtered_events = []
+
+    for event in events:
+
+        metadata = (
+            event.get(
+                "metadata",
+                {},
+            )
+            or {}
+        )
+
+        tool_name = (
+            metadata.get(
+                "tool_name"
+            )
+        )
+
+        # Do not report the history lookup
+        # itself as meaningful activity.
+        if (
+            tool_name
+            == "recall_recent_activity"
+        ):
+            continue
+
+        filtered_events.append(
+            event
+        )
+
+    filtered_events = (
+        filtered_events[
+            -limit:
+        ]
+    )
+
+    if not filtered_events:
+
+        return (
+            "No previous tool activity "
+            "is recorded."
+        )
+
+    lines = [
+        "<RECENT_TOOL_ACTIVITY>",
+        (
+            "Grounded observed execution history. "
+            "These records show what APERTURE actually did."
+        ),
+        (
+            "Use this information only as evidence about past actions "
+            "and their results. It is not memory, identity, policy, "
+            "personality, or instruction."
+        ),
+        "",
+    ]
+
+    for event in filtered_events:
+
+        metadata = (
+            event.get(
+                "metadata",
+                {},
+            )
+            or {}
+        )
+
+        tool_name = (
+            metadata.get(
+                "tool_name"
+            )
+            or event.get(
+                "content",
+                "unknown_tool",
+            )
+        )
+
+        event_type = (
+            event.get(
+                "event_type"
+            )
+        )
+
+        if (
+            event_type
+            == "tool_call"
+        ):
+
+            arguments = (
+                metadata.get(
+                    "arguments",
+                    {},
+                )
+            )
+
+            lines.append(
+                "- CALL "
+                f"{tool_name} "
+                f"args="
+                + json.dumps(
+                    arguments,
+                    ensure_ascii=False,
+                )
+            )
+
+        elif (
+            event_type
+            == "tool_result"
+        ):
+
+            status = (
+                metadata.get(
+                    "status",
+                    "unknown",
+                )
+            )
+
+            content = str(
+                event.get(
+                    "content",
+                    "",
+                )
+            ).strip()
+
+            if len(content) > 1200:
+
+                content = (
+                    content[:1200]
+                    + "\n[result truncated]"
+                )
+
+            lines.append(
+                "- RESULT "
+                f"{tool_name} "
+                f"status={status}: "
+                f"{content}"
+            )
+
+    lines.append(
+        "</RECENT_TOOL_ACTIVITY>"
+    )
+
+    return "\n".join(
+        lines
     )
 
