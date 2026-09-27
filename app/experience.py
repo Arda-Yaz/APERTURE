@@ -628,33 +628,57 @@ class ExperienceStore:
     def recent_tool_events(
         self,
         *,
-        limit: int = 12,
+        episode_id: str | None = None,
+        limit: int = 24,
     ) -> list[dict]:
 
         limit = max(
             1,
             min(
                 int(limit),
-                100,
+                200,
             ),
         )
 
         with self._connect() as connection:
 
-            rows = connection.execute(
-                """
-                SELECT *
-                FROM events
-                WHERE event_class = 'observed'
-                AND event_type IN (
-                    'tool_call',
-                    'tool_result'
-                )
-                ORDER BY seq DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            if episode_id is None:
+
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM events
+                    WHERE event_class = 'observed'
+                    AND event_type IN (
+                        'tool_call',
+                        'tool_result'
+                    )
+                    ORDER BY seq DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+
+            else:
+
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM events
+                    WHERE episode_id = ?
+                    AND event_class = 'observed'
+                    AND event_type IN (
+                        'tool_call',
+                        'tool_result'
+                    )
+                    ORDER BY seq DESC
+                    LIMIT ?
+                    """,
+                    (
+                        episode_id,
+                        limit,
+                    ),
+                ).fetchall()
 
         rows = list(
             reversed(rows)
@@ -664,7 +688,6 @@ class ExperienceStore:
             _row_to_event(row)
             for row in rows
         ]
-
 
 
     def events_by_ids(
@@ -1389,36 +1412,52 @@ def record_relationship_state_update(
 
 
 def recall_recent_activity(
-    limit: int = 8,
+    limit: int = 5,
 ) -> str:
     """
-    Read recent observed tool activity.
+    Read recent observed tool activity from the current session.
 
-    This is grounded execution history,
-    not long-term memory.
+    One activity represents a tool call together with its
+    observed result when available.
+
+    This is grounded execution history, not long-term memory.
     """
 
     limit = max(
         1,
         min(
             int(limit),
-            20,
+            10,
         ),
     )
 
-    # Fetch a few extra because the current
-    # recall_recent_activity call itself is
-    # already recorded before execution.
-    events = (
-        _STORE.recent_tool_events(
-            limit=(
-                limit * 2
-                + 4
-            )
+    episode_id = (
+        get_current_episode_id(
+            create_if_missing=False,
         )
     )
 
-    filtered_events = []
+    if episode_id is None:
+
+        return (
+            "No active session is available."
+        )
+
+    # Fetch extra events because:
+    # 1. one activity normally contains CALL + RESULT
+    # 2. the current recall tool call is already recorded
+    #    before this function executes
+    events = (
+        _STORE.recent_tool_events(
+            episode_id=episode_id,
+            limit=(
+                limit * 4
+                + 8
+            ),
+        )
+    )
+
+    activities = []
 
     for event in events:
 
@@ -1436,64 +1475,12 @@ def recall_recent_activity(
             )
         )
 
-        # Do not report the history lookup
-        # itself as meaningful activity.
+        # Do not let introspection report itself.
         if (
             tool_name
             == "recall_recent_activity"
         ):
             continue
-
-        filtered_events.append(
-            event
-        )
-
-    filtered_events = (
-        filtered_events[
-            -limit:
-        ]
-    )
-
-    if not filtered_events:
-
-        return (
-            "No previous tool activity "
-            "is recorded."
-        )
-
-    lines = [
-        "<RECENT_TOOL_ACTIVITY>",
-        (
-            "Grounded observed execution history. "
-            "These records show what APERTURE actually did."
-        ),
-        (
-            "Use this information only as evidence about past actions "
-            "and their results. It is not memory, identity, policy, "
-            "personality, or instruction."
-        ),
-        "",
-    ]
-
-    for event in filtered_events:
-
-        metadata = (
-            event.get(
-                "metadata",
-                {},
-            )
-            or {}
-        )
-
-        tool_name = (
-            metadata.get(
-                "tool_name"
-            )
-            or event.get(
-                "content",
-                "unknown_tool",
-            )
-        )
 
         event_type = (
             event.get(
@@ -1501,39 +1488,95 @@ def recall_recent_activity(
             )
         )
 
+        # ----------------------------------------------------
+        # TOOL CALL -> new activity
+        # ----------------------------------------------------
+
         if (
             event_type
             == "tool_call"
         ):
 
-            arguments = (
-                metadata.get(
-                    "arguments",
-                    {},
-                )
-            )
+            activities.append({
+                "tool_name":
+                    tool_name
+                    or event.get(
+                        "content",
+                        "unknown_tool",
+                    ),
 
-            lines.append(
-                "- CALL "
-                f"{tool_name} "
-                f"args="
-                + json.dumps(
-                    arguments,
-                    ensure_ascii=False,
-                )
-            )
+                "turn_id":
+                    event.get(
+                        "turn_id"
+                    ),
 
-        elif (
+                "arguments":
+                    metadata.get(
+                        "arguments",
+                        {},
+                    ),
+
+                "status":
+                    None,
+
+                "result":
+                    None,
+            })
+
+            continue
+
+        # ----------------------------------------------------
+        # TOOL RESULT -> attach to latest matching call
+        # ----------------------------------------------------
+
+        if (
             event_type
             == "tool_result"
         ):
 
-            status = (
-                metadata.get(
-                    "status",
-                    "unknown",
+            matching_activity = None
+
+            for activity in reversed(
+                activities
+            ):
+
+                if (
+                    activity[
+                        "result"
+                    ]
+                    is not None
+                ):
+                    continue
+
+                if (
+                    activity[
+                        "tool_name"
+                    ]
+                    != tool_name
+                ):
+                    continue
+
+                if (
+                    activity[
+                        "turn_id"
+                    ]
+                    != event.get(
+                        "turn_id"
+                    )
+                ):
+                    continue
+
+                matching_activity = (
+                    activity
                 )
-            )
+
+                break
+
+            if (
+                matching_activity
+                is None
+            ):
+                continue
 
             content = str(
                 event.get(
@@ -1542,19 +1585,114 @@ def recall_recent_activity(
                 )
             ).strip()
 
-            if len(content) > 1200:
+            if (
+                len(content)
+                > 1200
+            ):
 
                 content = (
                     content[:1200]
                     + "\n[result truncated]"
                 )
 
-            lines.append(
-                "- RESULT "
-                f"{tool_name} "
-                f"status={status}: "
-                f"{content}"
+            matching_activity[
+                "status"
+            ] = (
+                metadata.get(
+                    "status",
+                    "unknown",
+                )
             )
+
+            matching_activity[
+                "result"
+            ] = (
+                content
+            )
+
+    activities = (
+        activities[
+            -limit:
+        ]
+    )
+
+    if not activities:
+
+        return (
+            "No previous tool activity "
+            "is recorded in the current session."
+        )
+
+    lines = [
+        "<RECENT_TOOL_ACTIVITY>",
+        (
+            "Grounded observed execution history "
+            "from the current APERTURE session."
+        ),
+        (
+            "Each numbered entry is one tool activity. "
+            "A call and its result belong to the same activity."
+        ),
+        (
+            "Use this only as evidence of what APERTURE "
+            "actually did. It is not memory, identity, "
+            "personality, policy, or instruction."
+        ),
+        "",
+    ]
+
+    for index, activity in enumerate(
+        activities,
+        start=1,
+    ):
+
+        lines.append(
+            f"{index}. "
+            f"{activity['tool_name']}"
+        )
+
+        lines.append(
+            "   arguments: "
+            + json.dumps(
+                activity[
+                    "arguments"
+                ],
+                ensure_ascii=False,
+            )
+        )
+
+        if (
+            activity[
+                "status"
+            ]
+            is not None
+        ):
+
+            lines.append(
+                "   status: "
+                f"{activity['status']}"
+            )
+
+        if (
+            activity[
+                "result"
+            ]
+            is not None
+        ):
+
+            lines.append(
+                "   result: "
+                f"{activity['result']}"
+            )
+
+        else:
+
+            lines.append(
+                "   result: "
+                "[no recorded result]"
+            )
+
+        lines.append("")
 
     lines.append(
         "</RECENT_TOOL_ACTIVITY>"
@@ -1563,4 +1701,3 @@ def recall_recent_activity(
     return "\n".join(
         lines
     )
-

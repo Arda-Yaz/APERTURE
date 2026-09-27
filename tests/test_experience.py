@@ -360,5 +360,80 @@ class ExperienceStoreTests(
             "read_file",
         )
 
+
+
+    def test_recent_tool_events_can_be_scoped_to_episode(
+        self,
+    ):
+
+        other_episode_id = (
+            self.store.create_episode(
+                metadata={
+                    "other": True,
+                }
+            )
+        )
+
+        self.store.append_event(
+            episode_id=(
+                other_episode_id
+            ),
+            event_type="tool_call",
+            event_class="observed",
+            actor="aperture",
+            content="old_tool",
+            metadata={
+                "tool_name":
+                    "old_tool",
+
+                "arguments":
+                    {},
+            },
+        )
+
+        self.store.append_event(
+            episode_id=(
+                self.episode_id
+            ),
+            event_type="tool_call",
+            event_class="observed",
+            actor="aperture",
+            content="read_file",
+            metadata={
+                "tool_name":
+                    "read_file",
+
+                "arguments": {
+                    "path":
+                        "app/persona.py",
+                },
+            },
+        )
+
+        events = (
+            self.store
+            .recent_tool_events(
+                episode_id=(
+                    self.episode_id
+                ),
+                limit=10,
+            )
+        )
+
+        self.assertEqual(
+            len(events),
+            1,
+        )
+
+        self.assertEqual(
+            events[0][
+                "metadata"
+            ][
+                "tool_name"
+            ],
+            "read_file",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
