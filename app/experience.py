@@ -1413,9 +1413,13 @@ def record_relationship_state_update(
 
 def recall_recent_activity(
     limit: int = 5,
+    only_failures: bool = False,
 ) -> str:
     """
     Read recent observed tool activity from the current session.
+
+    Set only_failures=True to return only tool activities
+    with a recorded non-ok result.
 
     One activity represents a tool call together with its
     observed result when available.
@@ -1443,17 +1447,21 @@ def recall_recent_activity(
             "No active session is available."
         )
 
-    # Fetch extra events because:
-    # 1. one activity normally contains CALL + RESULT
-    # 2. the current recall tool call is already recorded
-    #    before this function executes
+    # Failure lookup may need to scan farther back
+    # through successful activities.
+    event_limit = (
+        100
+        if only_failures
+        else (
+            limit * 4
+            + 8
+        )
+    )
+
     events = (
         _STORE.recent_tool_events(
             episode_id=episode_id,
-            limit=(
-                limit * 4
-                + 8
-            ),
+            limit=event_limit,
         )
     )
 
@@ -1475,7 +1483,7 @@ def recall_recent_activity(
             )
         )
 
-        # Do not let introspection report itself.
+        # Introspection should not report itself.
         if (
             tool_name
             == "recall_recent_activity"
@@ -1489,7 +1497,7 @@ def recall_recent_activity(
         )
 
         # ----------------------------------------------------
-        # TOOL CALL -> new activity
+        # TOOL CALL
         # ----------------------------------------------------
 
         if (
@@ -1526,7 +1534,7 @@ def recall_recent_activity(
             continue
 
         # ----------------------------------------------------
-        # TOOL RESULT -> attach to latest matching call
+        # TOOL RESULT
         # ----------------------------------------------------
 
         if (
@@ -1610,6 +1618,27 @@ def recall_recent_activity(
                 content
             )
 
+    # --------------------------------------------------------
+    # OPTIONAL FAILURE FILTER
+    # --------------------------------------------------------
+
+    if only_failures:
+
+        activities = [
+            activity
+            for activity in activities
+            if (
+                activity[
+                    "status"
+                ]
+                is not None
+                and activity[
+                    "status"
+                ]
+                != "ok"
+            )
+        ]
+
     activities = (
         activities[
             -limit:
@@ -1618,17 +1647,35 @@ def recall_recent_activity(
 
     if not activities:
 
+        if only_failures:
+
+            return (
+                "No failed tool activity is recorded "
+                "in the current session."
+            )
+
         return (
             "No previous tool activity "
             "is recorded in the current session."
         )
 
-    lines = [
-        "<RECENT_TOOL_ACTIVITY>",
-        (
+    if only_failures:
+
+        history_description = (
+            "Grounded failed tool activity "
+            "from the current APERTURE session."
+        )
+
+    else:
+
+        history_description = (
             "Grounded observed execution history "
             "from the current APERTURE session."
-        ),
+        )
+
+    lines = [
+        "<RECENT_TOOL_ACTIVITY>",
+        history_description,
         (
             "Each numbered entry is one tool activity. "
             "A call and its result belong to the same activity."
@@ -1701,3 +1748,6 @@ def recall_recent_activity(
     return "\n".join(
         lines
     )
+
+
+
