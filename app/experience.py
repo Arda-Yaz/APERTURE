@@ -757,7 +757,16 @@ def _row_to_event(
     }
 
 
-_STORE = ExperienceStore()
+_STORE: ExperienceStore | None = None
+
+
+def _get_store() -> ExperienceStore:
+    """Initialize the default store on first use, never during import."""
+    global _STORE
+    if _STORE is None:
+        _STORE = ExperienceStore()
+    return _STORE
+
 
 _CURRENT_EPISODE_ID: (
     str | None
@@ -782,7 +791,7 @@ def start_episode(
         return _CURRENT_EPISODE_ID
 
     episode_id = (
-        _STORE.create_episode(
+        _get_store().create_episode(
             metadata=metadata,
         )
     )
@@ -885,7 +894,7 @@ def record_event(
         ensure_episode()
     )
 
-    return _STORE.append_event(
+    return _get_store().append_event(
         episode_id=episode_id,
         turn_id=turn_id,
         event_type=event_type,
@@ -1061,7 +1070,7 @@ def get_latest_episode_id(
 ) -> str | None:
 
     return (
-        _STORE.latest_episode_id()
+        _get_store().latest_episode_id()
     )
 
 
@@ -1083,7 +1092,7 @@ def build_episode_continuity_context(
         return ""
 
     events = (
-        _STORE
+        _get_store()
         .recent_observed_message_events(
             episode_id,
             limit=limit,
@@ -1167,7 +1176,7 @@ def get_episode_events(
 ) -> list[dict]:
 
     return (
-        _STORE.episode_events(
+        _get_store().episode_events(
             episode_id,
             limit=limit,
         )
@@ -1179,7 +1188,7 @@ def get_turn_events(
 ) -> list[dict]:
 
     return (
-        _STORE.turn_events(
+        _get_store().turn_events(
             turn_id
         )
     )
@@ -1200,7 +1209,7 @@ def get_recent_observed_message_events(
         return []
 
     return (
-        _STORE
+        _get_store()
         .recent_observed_message_events(
             episode_id,
             limit=limit,
@@ -1213,7 +1222,7 @@ def get_events_by_ids(
 ) -> list[dict]:
 
     return (
-        _STORE.events_by_ids(
+        _get_store().events_by_ids(
             event_ids
         )
     )
@@ -1459,7 +1468,7 @@ def recall_recent_activity(
     )
 
     events = (
-        _STORE.recent_tool_events(
+        _get_store().recent_tool_events(
             episode_id=episode_id,
             limit=event_limit,
         )

@@ -1,6 +1,5 @@
 import sqlite3
 import sys
-import tempfile
 import unittest
 
 from pathlib import Path
@@ -23,6 +22,11 @@ sys.path.insert(
 )
 
 
+from isolation_support import install_guards, TestTemporaryDirectory
+
+install_guards()
+
+
 from memory import MemoryStore  # noqa: E402
 
 
@@ -35,8 +39,9 @@ class MemoryTemporalTests(
     ):
 
         self.temp_dir = (
-            tempfile.TemporaryDirectory()
+            TestTemporaryDirectory()
         )
+        self.addCleanup(self.temp_dir.cleanup)
 
         self.db_path = (
             Path(
@@ -424,8 +429,9 @@ class LegacyMemoryMigrationTests(
     ):
 
         self.temp_dir = (
-            tempfile.TemporaryDirectory()
+            TestTemporaryDirectory()
         )
+        self.addCleanup(self.temp_dir.cleanup)
 
         self.db_path = (
             Path(

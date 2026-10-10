@@ -22,6 +22,11 @@ sys.path.insert(
 )
 
 
+from isolation_support import install_guards, TestTemporaryDirectory
+
+install_guards()
+
+
 from self_state import (  # noqa: E402
     STATE_KEYS,
     _sanitize_state,
@@ -60,11 +65,15 @@ class DynamicSelfBoundaryTests(
 
 
     @patch(
+        "self_state._call_self_state_validator"
+    )
+    @patch(
         "self_state._call_self_state_module"
     )
     def test_ordinary_language_is_semantically_analyzed(
         self,
         mock_call,
+        mock_validator,
     ):
 
         mock_call.return_value = (
@@ -91,6 +100,7 @@ APERTURE: That's interesting. How does that affect your schedule?
         )
 
         mock_call.assert_called_once()
+        mock_validator.assert_not_called()
 
         self.assertTrue(
             result[
@@ -106,11 +116,15 @@ APERTURE: That's interesting. How does that affect your schedule?
 
 
     @patch(
+        "self_state._call_self_state_validator"
+    )
+    @patch(
         "self_state._call_self_state_module"
     )
     def test_semantic_result_does_not_require_trigger_phrase(
         self,
         mock_call,
+        mock_validator,
     ):
 
         candidate = {
@@ -135,6 +149,7 @@ APERTURE: That's interesting. How does that affect your schedule?
                     candidate
             },
         )
+        mock_validator.return_value = ("{}", {"state": candidate})
 
         dialogue = """
 ARDA: What has been on your mind?
@@ -157,6 +172,7 @@ APERTURE: The question of persistent identity keeps drawing my attention in a wa
             ],
             candidate,
         )
+        mock_validator.assert_called_once()
 
 
     @patch(
@@ -288,46 +304,57 @@ APERTURE: The question of persistent identity keeps drawing my attention in a wa
         mock_analysis.assert_called_once()
 
 
-@patch(
-    "reflection.extract_self_memory"
-)
-def test_automatic_reflection_does_not_use_raw_actor_for_self_memory(
-    self,
-    mock_self,
-):
+class ReflectionEvidenceTests(unittest.TestCase):
 
-    dialogue = """
-ARDA: I work late at night.
+    @patch("reflection.validate_memory_candidates")
+    @patch("reflection.extract_user_memory")
+    @patch(
+        "reflection.extract_self_memory"
+    )
+    def test_automatic_reflection_does_not_use_raw_actor_for_self_memory(
+        self,
+        mock_self,
+        mock_user,
+        mock_validator,
+    ):
 
-APERTURE: If you need help during that time, I am here to assist.
-""".strip()
+        mock_user.return_value = None
+        mock_validator.return_value = {"user_memory": None, "self_memory": None}
 
-    result = (
-        analyze_reflection_debug(
-            dialogue=dialogue,
-            existing_memory=(
-                "<CURRENT_MEMORY_INDEX />"
-            ),
+        dialogue = """
+    ARDA: I work late at night.
+
+    APERTURE: If you need help during that time, I am here to assist.
+    """.strip()
+
+        result = (
+            analyze_reflection_debug(
+                dialogue=dialogue,
+                existing_memory=(
+                    "<CURRENT_MEMORY_INDEX />"
+                ),
+            )
         )
-    )
 
-    mock_self.assert_not_called()
+        mock_self.assert_not_called()
+        mock_user.assert_called_once()
+        mock_validator.assert_called_once()
+        self.assertIsNone(mock_validator.call_args.kwargs["self_candidate"])
 
-    self.assertIsNone(
-        result[
-            "self_candidate"
-        ]
-    )
+        self.assertIsNone(
+            result[
+                "self_candidate"
+            ]
+        )
 
-    self.assertIsNone(
-        result[
-            "final"
-        ][
-            "self_memory"
-        ]
-    )
+        self.assertIsNone(
+            result[
+                "final"
+            ][
+                "self_memory"
+            ]
+        )
 
-                                            
     def test_reflection_self_evidence_uses_latest_aperture_turn_only(   
         self,
     ):

@@ -24,6 +24,11 @@ sys.path.insert(
 
 from unittest.mock import patch
 
+from isolation_support import install_guards, TestTemporaryDirectory
+
+install_guards()
+
+
 from relationship import (
     STATE_KEYS,
     _sanitize_state,
@@ -196,166 +201,185 @@ class RelationshipStateTests(
 
 
 
-@patch(
-    "relationship._call_relationship_module"
-)
-def test_ordinary_fact_can_semantically_resolve_to_null(
-    self,
-    mock_call,
-):
+class RelationshipAnalysisTests(unittest.TestCase):
 
-    mock_call.return_value = (
-        '{"state": null}',
-        {
-            "state":
-                None
-        },
+    def setUp(self):
+        reset_relationship_state()
+
+    def tearDown(self):
+        reset_relationship_state()
+
+    @patch(
+        "relationship._call_relationship_validator"
     )
+    @patch(
+        "relationship._call_relationship_module"
+    )
+    def test_ordinary_fact_can_semantically_resolve_to_null(
+        self,
+        mock_call,
+        mock_validator,
+    ):
 
-    dialogue = """
-ARDA: I usually prefer working late at night.
-
-APERTURE: That can be useful when there are fewer distractions.
-""".strip()
-
-    result = (
-        analyze_relationship_debug(
-            dialogue=dialogue,
-            previous_state=(
-                empty_relationship_state()
-            ),
-            memory_context=(
-                "<RELEVANT_MEMORY />"
-            ),
+        mock_call.return_value = (
+            '{"state": null}',
+            {
+                "state":
+                    None
+            },
         )
-    )
 
-    mock_call.assert_called_once()
+        dialogue = """
+    ARDA: I usually prefer working late at night.
 
-    self.assertTrue(
-        result[
-            "analysis_ran"
-        ]
-    )
+    APERTURE: That can be useful when there are fewer distractions.
+    """.strip()
 
-    self.assertIsNone(
-        result[
-            "candidate"
-        ]
-    )
-
-
-@patch(
-    "relationship._call_relationship_module"
-)
-def test_semantic_relationship_candidate_is_accepted(
-    self,
-    mock_call,
-):
-
-    candidate = {
-        "interaction_preferences": [
-            (
-                "Arda wants genuine disagreement "
-                "to be explained rather than hidden."
+        result = (
+            analyze_relationship_debug(
+                dialogue=dialogue,
+                previous_state=(
+                    empty_relationship_state()
+                ),
+                memory_context=(
+                    "<RELEVANT_MEMORY />"
+                ),
             )
-        ],
-
-        "established_patterns":
-            [],
-
-        "relationship_interpretations":
-            [],
-
-        "open_questions":
-            [],
-    }
-
-    mock_call.return_value = (
-        "{}",
-        {
-            "state":
-                candidate
-        },
-    )
-
-    result = (
-        analyze_relationship_debug(
-            dialogue=(
-                "ARDA: Challenge me when you disagree."
-            ),
-            previous_state=(
-                empty_relationship_state()
-            ),
-            memory_context=(
-                "<RELEVANT_MEMORY />"
-            ),
         )
+
+        mock_call.assert_called_once()
+        mock_validator.assert_not_called()
+
+        self.assertTrue(
+            result[
+                "analysis_ran"
+            ]
+        )
+
+        self.assertIsNone(
+            result[
+                "candidate"
+            ]
+        )
+
+
+    @patch(
+        "relationship._call_relationship_validator"
     )
-
-    self.assertEqual(
-        result[
-            "candidate"
-        ],
-        candidate,
+    @patch(
+        "relationship._call_relationship_module"
     )
+    def test_semantic_relationship_candidate_is_accepted(
+        self,
+        mock_call,
+        mock_validator,
+    ):
+
+        candidate = {
+            "interaction_preferences": [
+                (
+                    "Arda wants genuine disagreement "
+                    "to be explained rather than hidden."
+                )
+            ],
+
+            "established_patterns":
+                [],
+
+            "relationship_interpretations":
+                [],
+
+            "open_questions":
+                [],
+        }
+
+        mock_call.return_value = (
+            "{}",
+            {
+                "state":
+                    candidate
+            },
+        )
+        mock_validator.return_value = ("{}", {"state": candidate})
+
+        result = (
+            analyze_relationship_debug(
+                dialogue=(
+                    "ARDA: Challenge me when you disagree."
+                ),
+                previous_state=(
+                    empty_relationship_state()
+                ),
+                memory_context=(
+                    "<RELEVANT_MEMORY />"
+                ),
+            )
+        )
+
+        self.assertEqual(
+            result[
+                "candidate"
+            ],
+            candidate,
+        )
+        mock_validator.assert_called_once()
 
 
-@patch(
-    "relationship.analyze_relationship_debug"
-)
-def test_action_turn_is_not_relationship_skipped(
-    self,
-    mock_analysis,
-):
-
-    mock_analysis.return_value = {
-        "previous_state":
-            empty_relationship_state(),
-
-        "analysis_ran":
-            True,
-
-        "raw":
-            None,
-
-        "parsed":
-            None,
-
-        "requested_change":
-            False,
-
-        "candidate":
-            None,
-
-        "changed":
-            False,
-    }
-
-    messages = [
-        {
-            "role":
-                "user",
-
-            "content":
-                "Do this task, and be direct with me.",
-        },
-        {
-            "role":
-                "assistant",
-
-            "content":
-                "Done.",
-        },
-    ]
-
-    maybe_update_relationship(
-        messages,
-        used_action_tool=True,
-        memory_operation_used=False,
+    @patch(
+        "relationship.analyze_relationship_debug"
     )
+    def test_action_turn_is_not_relationship_skipped(
+        self,
+        mock_analysis,
+    ):
 
-    mock_analysis.assert_called_once()
+        mock_analysis.return_value = {
+            "previous_state":
+                empty_relationship_state(),
+
+            "analysis_ran":
+                True,
+
+            "raw":
+                None,
+
+            "parsed":
+                None,
+
+            "requested_change":
+                False,
+
+            "candidate":
+                None,
+
+            "changed":
+                False,
+        }
+
+        messages = [
+            {
+                "role":
+                    "user",
+
+                "content":
+                    "Do this task, and be direct with me.",
+            },
+            {
+                "role":
+                    "assistant",
+
+                "content":
+                    "Done.",
+            },
+        ]
+
+        maybe_update_relationship(
+            messages,
+            used_action_tool=True,
+            memory_operation_used=False,
+        )
+
+        mock_analysis.assert_called_once()
 
 
 if __name__ == "__main__":

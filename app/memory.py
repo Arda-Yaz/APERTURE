@@ -1484,7 +1484,15 @@ class MemoryStore:
         return forgotten
 
 
-_STORE = MemoryStore()
+_STORE: MemoryStore | None = None
+
+
+def _get_store() -> MemoryStore:
+    """Initialize the default store on first use, never during import."""
+    global _STORE
+    if _STORE is None:
+        _STORE = MemoryStore()
+    return _STORE
 
 
 def build_memory_validation_context(
@@ -1499,7 +1507,7 @@ def build_memory_validation_context(
     """
 
     memories = (
-        _STORE.top_memories(
+        _get_store().top_memories(
             limit=limit
         )
     )
@@ -1551,7 +1559,7 @@ def build_self_memory_context(
     limit: int = 20,
 ) -> str:
     memories = (
-        _STORE.top_memories_for_subject(
+        _get_store().top_memories_for_subject(
             subject="aperture",
             limit=limit,
         )
@@ -1605,7 +1613,7 @@ def save_memory(
     """
 
     try:
-        result = _STORE.remember(
+        result = _get_store().remember(
         content=content,
         category=category,
         importance=importance,
@@ -1643,7 +1651,7 @@ def save_self_memory(
     """
 
     try:
-        result = _STORE.remember(
+        result = _get_store().remember(
             content=content,
             category=category,
             importance=importance,
@@ -1704,7 +1712,7 @@ def save_reflection_memory(
 
     if supersedes_memory_id:
 
-        return _STORE.supersede(
+        return _get_store().supersede(
             supersedes_memory_id,
             content=content,
             category=category,
@@ -1716,7 +1724,7 @@ def save_reflection_memory(
             ),
         )
 
-    return _STORE.remember(
+    return _get_store().remember(
         content=content,
         category=category,
         importance=importance,
@@ -1736,7 +1744,7 @@ def get_memory_record(
 ) -> dict | None:
 
     return (
-        _STORE.get_by_id(
+        _get_store().get_by_id(
             memory_id
         )
     )
@@ -1747,7 +1755,7 @@ def get_recent_memory_records(
 ) -> list[dict]:
 
     return (
-        _STORE.recent_records(
+        _get_store().recent_records(
             limit=limit
         )
     )
@@ -1757,7 +1765,7 @@ def build_relevant_memory_context(
     query: str,
     limit: int = 8,
 ) -> str:
-    memories = _STORE.search(
+    memories = _get_store().search(
         query=query,
         limit=limit,
     )
@@ -1815,7 +1823,7 @@ def search_memory(
     """
 
     try:
-        results = _STORE.search(
+        results = _get_store().search(
             query=query,
             limit=limit,
         )
@@ -1851,7 +1859,7 @@ def forget_memory(memory_id: str) -> str:
     """
 
     try:
-        forgotten = _STORE.forget(memory_id)
+        forgotten = _get_store().forget(memory_id)
 
         if forgotten:
             return f"MEMORY_FORGOTTEN: id={memory_id}"
@@ -1868,7 +1876,7 @@ def forget_memory(memory_id: str) -> str:
 def build_memory_context(
     limit: int = 40,
 ) -> str:
-    memories = _STORE.top_memories(limit=limit)
+    memories = _get_store().top_memories(limit=limit)
 
     if not memories:
         return (
@@ -1963,14 +1971,14 @@ def build_actor_memory_context(
     """
 
     self_memories = (
-        _STORE.top_memories_for_subject(
+        _get_store().top_memories_for_subject(
             subject="aperture",
             limit=self_limit,
         )
     )
 
     relevant_memories = (
-        _STORE.search(
+        _get_store().search(
             query=query,
             limit=relevant_limit,
         )
