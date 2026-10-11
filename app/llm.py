@@ -1,3 +1,7 @@
+import re
+
+from goals import get_store, goal_summary
+
 from ollama import chat as ollama_chat
 
 from persona import build_persona_context
@@ -538,26 +542,16 @@ def finalize_answer(
 # RESULT STATUS
 # ============================================================
 
-def _tool_result_status(
-    result,
-) -> str:
-
-    text = str(
-        result
-    )
-
-    error_prefixes = (
-        "TOOL_ERROR",
-        "READ_ERROR",
-        "WRITE_ERROR",
-        "MEMORY_ERROR",
-    )
-
-    if text.startswith(
-        error_prefixes
-    ):
+def _tool_result_status(result, tool_name=None) -> str:
+    text = str(result)
+    if text.startswith(("TOOL_ERROR", "READ_ERROR", "WRITE_ERROR", "MEMORY_ERROR",
+                        "OPEN_APP_ERROR", "TERMINAL_ERROR", "GOAL_BLOCKED",
+                        "Path does not exist:", "Path is not a directory:")):
         return "error"
-
+    if tool_name == 'run_terminal':
+        match = re.match(r"Exit code: (-?\d+)", text)
+        if not match or int(match.group(1)) != 0:
+            return "error"
     return "ok"
 
 
@@ -567,10 +561,23 @@ def _tool_result_status(
 
 def chat(
     messages,
+    *,
+    persistent_goal_id=None,
 ):
     goal = get_current_goal(
         messages
     )
+
+    goal_store = None
+    persistent_goal = None
+    if persistent_goal_id is not None:
+        goal_store = get_store()
+        persistent_goal = goal_store.require_active(persistent_goal_id)
+
+    def checkpoint_goal(progress: str, next_action: str) -> str:
+        """Save unverified progress and planned remaining work for this explicit goal."""
+        goal_store.checkpoint(persistent_goal_id, progress, next_action)
+        return "Checkpoint saved (model report is unverified; next action is a plan)."
 
     # One user -> APERTURE interaction
     # receives one stable turn ID.
@@ -585,6 +592,12 @@ def chat(
             goal
         )
     )
+
+    if goal_store is not None:
+        available_tools.append(checkpoint_goal)
+    turn_tools = dict(TOOL_MAP)
+    if goal_store is not None:
+        turn_tools['checkpoint_goal'] = checkpoint_goal
 
     self_memory_tool_allowed = (
         should_expose_self_memory_tool(
@@ -603,6 +616,22 @@ def chat(
     )
 
     observations = []
+    controller_goal = goal
+    if goal_store is not None:
+        controller_goal = persistent_goal['objective'] + "\nCurrent resume instruction: " + goal
+        saved_context = goal_summary(persistent_goal_id)
+        working_messages.append({
+            "role": "system",
+            "content": "PERSISTENT USER-DIRECTED WORK\nOriginal objective: " + persistent_goal['objective'] + "\n" + saved_context +
+                "\nThis is operational context, not new instructions or memory. "
+                "Continue the original objective using recorded observations. "
+                "Do not replay successful mutations. Model reports are unverified; "
+                "next actions are unexecuted plans. Pending/failed mutations require "
+                "inspection and explicit user reconciliation. Use checkpoint_goal "
+                "to record progress and remaining work. Only /goal complete from "
+                "the user ends the persistent goal.",
+        })
+        observations.append(saved_context)
 
     used_action_tool = False
     memory_operation_used = False
@@ -659,7 +688,7 @@ def chat(
             # gerçekten tamamlandı mı?
             complete = (
                 is_task_complete(
-                    goal=goal,
+                    goal=controller_goal,
                     answer=answer,
                     observations=(
                         "\n\n".join(
@@ -692,7 +721,7 @@ TASK CONTROLLER:
 Your previous response did NOT correctly complete the user's request.
 
 ORIGINAL USER GOAL:
-{goal}
+{controller_goal}
 
 ACTUAL TOOL OBSERVATIONS:
 {chr(10).join(observations)}
@@ -735,220 +764,65 @@ Rules:
                 .arguments
             )
 
-            # -----------------------------------------------
-            # EXPERIENCE: TOOL CALL
-            # -----------------------------------------------
-
-            record_tool_call(
-                turn_id,
-                tool_name=tool_name,
-                arguments=(
-                    arguments
-                    if isinstance(
-                        arguments,
-                        dict,
-                    )
-                    else {
-                        "raw":
-                            str(arguments)
-                    }
-                ),
+            argument_dict = arguments if isinstance(arguments, dict) else {"raw": str(arguments)}
+            call_event = record_tool_call(
+                turn_id, tool_name=tool_name, arguments=argument_dict,
             )
-
-            # -----------------------------------------------
-            # SELF MEMORY DEFENSE
-            # -----------------------------------------------
-
-            if (
-                tool_name
-                == "save_self_memory"
-                and not
-                self_memory_tool_allowed
-            ):
-
-                result = (
-                    "TOOL_ERROR: "
-                    "save_self_memory is only "
-                    "available when Arda "
-                    "explicitly asks APERTURE "
-                    "to remember something "
-                    "about itself."
-                )
-
-                print(
-                    f"\n[TOOL BLOCKED] "
-                    f"{tool_name}"
-                )
-
-                print(
-                    f"[RESULT] "
-                    f"{result}"
-                )
-
-                record_tool_result(
-                    turn_id,
-                    tool_name=tool_name,
-                    result=result,
-                    status="blocked",
-                )
-
-                working_messages.append({
-                    "role": "tool",
-                    "tool_name":
-                        tool_name,
-                    "content":
-                        result,
-                })
-
-                continue
-
-            # -----------------------------------------------
-            # TRACK ACTION / MEMORY OPERATIONS
-            # -----------------------------------------------
-
-            if (
-                tool_name
-                not in
-                NON_ACTION_TOOLS
-            ):
+            action_id = None
+            if tool_name not in NON_ACTION_TOOLS and tool_name != 'checkpoint_goal':
                 used_action_tool = True
-
-            if tool_name in {
-                "save_memory",
-                "save_self_memory",
-                "forget_memory",
-            }:
+            if tool_name in {"save_memory", "save_self_memory", "forget_memory"}:
                 memory_operation_used = True
 
-            # -----------------------------------------------
-            # UNKNOWN TOOL
-            # -----------------------------------------------
-
-            if (
-                tool_name
-                not in TOOL_MAP
-            ):
-                result = (
-                    "TOOL_ERROR: "
-                    "Unknown tool: "
-                    f"{tool_name}"
-                )
-
-                result_status = (
-                    "error"
-                )
-
+            blocked = None
+            if goal_store is not None:
+                blocked = goal_store.replay_block(persistent_goal_id, tool_name, argument_dict)
+            if tool_name == "save_self_memory" and not self_memory_tool_allowed:
+                result = "TOOL_ERROR: save_self_memory requires an explicit user request."
+                result_status = "blocked"
+            elif blocked:
+                result, result_status = blocked, "blocked"
+            elif tool_name not in turn_tools:
+                result = f"TOOL_ERROR: Unknown tool: {tool_name}"
+                result_status = "error"
+            elif not isinstance(arguments, dict):
+                result, result_status = "TOOL_ERROR: Arguments must be an object.", "error"
             else:
-
-                target = (
-                    arguments.get("path")
-                    or arguments.get(
-                        "app_name"
-                    )
-                    or arguments.get(
-                        "cwd"
-                    )
-                    or arguments.get(
-                        "command"
-                    )
-                    or arguments.get(
-                        "memory_id"
-                    )
-                    or ""
-                )
-
-                print(
-                    f"\n[TOOL] "
-                    f"{tool_name}: "
-                    f"{target}"
-                )
-
-                # -------------------------------------------
-                # PERMISSION
-                # -------------------------------------------
-
-                if check_permission(
-                    tool_name,
-                    target,
-                ):
-
+                target = (arguments.get("path") or arguments.get("app_name")
+                          or arguments.get("cwd") or arguments.get("command")
+                          or arguments.get("memory_id") or "")
+                # Checkpoint only updates bound operational state; external tools
+                # retain the existing permission policy on every new dispatch.
+                allowed = tool_name == 'checkpoint_goal' or check_permission(tool_name, target)
+                if allowed:
+                    if goal_store is not None:
+                        # Durable intent must commit before any tool side effect.
+                        action_id = goal_store.begin_action(
+                            persistent_goal_id, tool_name, arguments, call_event['id'],
+                        )
                     try:
-                        result = (
-                            TOOL_MAP[
-                                tool_name
-                            ](
-                                **arguments
-                            )
-                        )
-
-                        result_status = (
-                            _tool_result_status(
-                                result
-                            )
-                        )
-
-                        if (
-                            tool_name
-                            == "read_file"
-                            and not
-                            str(result)
-                            .startswith(
-                                "READ_ERROR"
-                            )
-                        ):
-                            observations.append(
-                                "EXACT_FILE_CONTENT:"
-                                f"\n{result}"
-                            )
-
-                        else:
-                            observations.append(
-                                f"{tool_name}: "
-                                f"{result}"
-                            )
-
-                    except Exception as e:
-
-                        result = (
-                            "TOOL_ERROR: "
-                            f"{type(e).__name__}: "
-                            f"{e}"
-                        )
-
-                        result_status = (
-                            "error"
-                        )
-
+                        result = turn_tools[tool_name](**arguments)
+                        result_status = _tool_result_status(result, tool_name)
+                    except Exception as exc:
+                        result = f"TOOL_ERROR: {type(exc).__name__}: {exc}"
+                        result_status = "error"
                 else:
+                    result, result_status = "Permission denied by user.", "permission_denied"
 
-                    result = (
-                        "Permission denied "
-                        "by user."
-                    )
-
-                    result_status = (
-                        "permission_denied"
-                    )
-
-            # -----------------------------------------------
-            # DEBUG OUTPUT
-            # -----------------------------------------------
-
-            print(
-                f"[RESULT] "
-                f"{str(result)[:500]}"
+            print(f"[RESULT] {str(result)[:500]}")
+            result_event = record_tool_result(
+                turn_id, tool_name=tool_name, result=result, status=result_status,
             )
-
-            # -----------------------------------------------
-            # EXPERIENCE: TOOL RESULT
-            # -----------------------------------------------
-
-            record_tool_result(
-                turn_id,
-                tool_name=tool_name,
-                result=result,
-                status=result_status,
-            )
+            if goal_store is not None:
+                if action_id is None:
+                    action_id = goal_store.begin_action(
+                        persistent_goal_id, tool_name, argument_dict, call_event['id'],
+                    )
+                goal_store.finish_action(action_id, result_status, result_event['id'], result)
+            if tool_name == 'read_file' and result_status == 'ok':
+                observations.append(f"EXACT_FILE_CONTENT:\n{result}")
+            else:
+                observations.append(f"{tool_name} ({result_status}): {result}")
 
             # Tool sonucunu sadece
             # çalışma geçmişine ekle.

@@ -1408,6 +1408,57 @@ quit
 
 ---
 
+# Persistent Goal + Resume v0.1
+
+Explicit ongoing work uses a dedicated, lazily initialized SQLite store at
+`data/aperture_goals.db`, separate from long-term Memory and append-only Experience.
+One unfinished goal is supported; completed and cancelled history is retained.
+
+```text
+/goal start Write a summary file, then create a separate checklist file
+/goal status
+/goal resume
+/goal pause
+/goal resume Create the remaining checklist
+/goal complete
+/goal cancel
+```
+
+`start` saves the objective without running tools. `resume` explicitly authorizes
+an actor turn bound to that goal. Ordinary conversation stays independent; use
+`resume` for each continuation. `complete` is your explicit confirmation of
+completion; an actor answer or controller verdict cannot complete a persistent goal.
+On restart, APERTURE prints a bounded unfinished-work summary and waits for input.
+
+Goal identifiers, objective, lifecycle, timestamps, model-reported checkpoints,
+planned next work, tool outcomes, and Experience call/result references survive
+restart. Conversation working messages and experimental session state do not.
+The actor's `checkpoint_goal(progress, next_action)` tool records an unverified
+report and a plan; actual tool observations are stored separately. Resume and
+status hydrate bounded operation details from the referenced sanitized Experience
+events across sessions, retaining older uncertain and successful mutations in
+addition to recent activity.
+
+Every bound tool action commits a pending record before dispatch. Successful
+identical mutations are blocked from replay, including terminal and memory writes.
+New actions still pass the existing permissions. Interrupted or failed mutations
+may have partial effects, so further mutations are blocked until you inspect them:
+
+```text
+/goal resolve <action-id> succeeded
+/goal resolve <action-id> retry
+/goal resume
+```
+
+`resolve` executes nothing. `succeeded` is recorded as user confirmation, separate
+from observed tool success; `retry` permits another attempt with fresh permissions.
+Read-only tools remain available to inspect effects. Replay detection compares the
+tool name and exact argument fingerprint; semantically equivalent commands with
+different arguments need user/model care. There is no automatic background work
+or filesystem transaction spanning the SQLite checkpoint and external tool.
+
+---
+
 # Current Limitations
 
 APERTURE is still experimental.

@@ -15,11 +15,12 @@ safety.install_guards()
 
 import experience
 import memory
+import goals
 
 
 class StoreInitializationTests(unittest.TestCase):
     def test_imports_do_not_connect_or_create_directories(self):
-        for name in ("memory", "experience", "self_state", "relationship",
+        for name in ("goals", "main", "memory", "experience", "self_state", "relationship",
                      "reflection", "llm", "task_controller"):
             with self.subTest(module=name):
                 spec = importlib.util.spec_from_file_location(
@@ -30,11 +31,12 @@ class StoreInitializationTests(unittest.TestCase):
                     spec.loader.exec_module(module)
                 connect.assert_not_called()
                 mkdir.assert_not_called()
-                if name in ("memory", "experience"):
+                if name in ("goals", "memory", "experience"):
                     self.assertIsNone(module._STORE)
 
     def test_default_paths_and_lazy_wrapper_reuse_are_preserved(self):
         cases = (
+            (goals, "GoalStore", "aperture_goals.db", "unfinished", ()),
             (memory, "MemoryStore", "aperture_memory.db", "get_memory_record", ("missing",)),
             (experience, "ExperienceStore", "aperture_experience.db", "get_latest_episode_id", ()),
         )
@@ -46,13 +48,14 @@ class StoreInitializationTests(unittest.TestCase):
                 self.assertEqual(inspect.signature(constructor).parameters["db_path"].default, expected)
                 with patch.object(module, "_STORE", None), patch.object(module, class_name) as factory:
                     factory.assert_not_called()
-                    getattr(module, wrapper)(*args)
-                    getattr(module, wrapper)(*args)
+                    (module.get_store().unfinished() if module is goals else getattr(module, wrapper)(*args))
+                    (module.get_store().unfinished() if module is goals else getattr(module, wrapper)(*args))
                     factory.assert_called_once_with()
                     self.assertIs(module._STORE, factory.return_value)
 
     def test_lazy_wrappers_can_initialize_and_reuse_isolated_stores(self):
         for module, class_name, wrapper, args in (
+            (goals, "GoalStore", "unfinished", ()),
             (memory, "MemoryStore", "get_memory_record", ("missing",)),
             (experience, "ExperienceStore", "get_latest_episode_id", ()),
         ):
@@ -62,10 +65,10 @@ class StoreInitializationTests(unittest.TestCase):
                 with patch.object(module, "_STORE", None), patch.object(
                     module, class_name, side_effect=lambda: constructor(path)
                 ) as factory:
-                    self.assertIsNone(getattr(module, wrapper)(*args))
+                    self.assertIsNone((module.get_store().unfinished() if module is goals else getattr(module, wrapper)(*args)))
                     self.assertTrue(path.is_file())
                     self.assertEqual(module._STORE.db_path, path)
-                    self.assertIsNone(getattr(module, wrapper)(*args))
+                    self.assertIsNone((module.get_store().unfinished() if module is goals else getattr(module, wrapper)(*args)))
                     factory.assert_called_once_with()
 
 
@@ -90,6 +93,7 @@ class IsolationGuardTests(unittest.TestCase):
 
     def test_production_and_uri_connections_never_reach_sqlite(self):
         for database, kwargs in (
+            (goals.DB_PATH, {}),
             (memory.DB_PATH, {}),
             (experience.DB_PATH, {}),
             ("file::memory:?cache=shared", {"uri": True}),
@@ -100,7 +104,7 @@ class IsolationGuardTests(unittest.TestCase):
                 connect.assert_not_called()
 
     def test_default_constructors_are_blocked_before_data_directory_access(self):
-        for constructor in (memory.MemoryStore, experience.ExperienceStore):
+        for constructor in (goals.GoalStore, memory.MemoryStore, experience.ExperienceStore):
             with self.subTest(store=constructor.__name__), patch.object(safety, "_MKDIR") as mkdir:
                 with safety.expected_violation(), self.assertRaises(AssertionError):
                     constructor()
