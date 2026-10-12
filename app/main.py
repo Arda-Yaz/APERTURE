@@ -1,4 +1,5 @@
 from llm import chat
+from goal_execution import run_goal
 
 from experience import (
     start_episode,
@@ -162,9 +163,15 @@ def main():
                 flush=True,
             )
 
-            answer = chat(
-                messages, persistent_goal_id=execution_goal_id,
-            )
+            if execution_goal_id is not None and user_input.strip().split()[1] == 'run':
+                answer = run_goal(
+                    messages, persistent_goal_id=execution_goal_id,
+                    cycles=int(user_input.strip().split()[2]),
+                )
+            else:
+                answer = chat(
+                    messages, persistent_goal_id=execution_goal_id,
+                )
 
             print(answer)
             print()

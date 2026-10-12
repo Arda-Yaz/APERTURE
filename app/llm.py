@@ -563,6 +563,7 @@ def chat(
     messages,
     *,
     persistent_goal_id=None,
+    execution_session=None,
 ):
     goal = get_current_goal(
         messages
@@ -574,6 +575,13 @@ def chat(
         goal_store = get_store()
         persistent_goal = goal_store.require_active(persistent_goal_id)
 
+    if execution_session is not None:
+        if execution_session.goal_id != persistent_goal_id:
+            raise ValueError("Execution session goal does not match actor goal.")
+        if not execution_session.check():
+            return execution_session.stop_reason
+        goal = persistent_goal['objective']
+
     def checkpoint_goal(progress: str, next_action: str) -> str:
         """Save unverified progress and planned remaining work for this explicit goal."""
         goal_store.checkpoint(persistent_goal_id, progress, next_action)
@@ -581,11 +589,8 @@ def chat(
 
     # One user -> APERTURE interaction
     # receives one stable turn ID.
-    turn_id = (
-        start_turn(
-            goal
-        )
-    )
+    turn_id = (execution_session.turn_id if execution_session is not None
+               else start_turn(goal))
 
     available_tools = (
         get_tools_for_goal(
@@ -633,12 +638,25 @@ def chat(
         })
         observations.append(saved_context)
 
+    if execution_session is not None:
+        working_messages.append({'role': 'system', 'content': execution_session.context()})
+
     used_action_tool = False
     memory_operation_used = False
+
+    def execution_stop_answer():
+        return finalize_answer(
+            messages, "Bounded execution stopped: " + execution_session.stop_reason,
+            turn_id=turn_id, used_action_tool=used_action_tool,
+            memory_operation_used=memory_operation_used,
+        )
 
     for step in range(
         MAX_STEPS
     ):
+
+        if execution_session is not None and not execution_session.check():
+            return execution_stop_answer()
 
         response = ollama_chat(
             model=MODEL,
@@ -686,6 +704,8 @@ def chat(
 
             # Tool kullanıldıysa görev
             # gerçekten tamamlandı mı?
+            if execution_session is not None and not execution_session.check():
+                return execution_stop_answer()
             complete = (
                 is_task_complete(
                     goal=controller_goal,
@@ -752,6 +772,9 @@ Rules:
             .tool_calls
         ):
 
+            if execution_session is not None and not execution_session.before_tool():
+                return execution_stop_answer()
+
             tool_name = (
                 call
                 .function
@@ -794,6 +817,8 @@ Rules:
                 # Checkpoint only updates bound operational state; external tools
                 # retain the existing permission policy on every new dispatch.
                 allowed = tool_name == 'checkpoint_goal' or check_permission(tool_name, target)
+                if execution_session is not None and not execution_session.check_dispatch():
+                    return execution_stop_answer()
                 if allowed:
                     if goal_store is not None:
                         # Durable intent must commit before any tool side effect.
@@ -819,6 +844,10 @@ Rules:
                         persistent_goal_id, tool_name, argument_dict, call_event['id'],
                     )
                 goal_store.finish_action(action_id, result_status, result_event['id'], result)
+            if execution_session is not None:
+                execution_session.observe(tool_name, argument_dict, result, result_status)
+                if execution_session.stop_reason:
+                    return execution_stop_answer()
             if tool_name == 'read_file' and result_status == 'ok':
                 observations.append(f"EXACT_FILE_CONTENT:\n{result}")
             else:
@@ -847,6 +876,9 @@ Rules:
         turn_id,
         reason=stop_reason,
     )
+    if execution_session is not None:
+        execution_session.stop("per-cycle model step budget exhausted")
+        return execution_stop_answer()
 
     return stop_reason
 

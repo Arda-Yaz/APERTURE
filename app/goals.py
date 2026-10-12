@@ -226,6 +226,13 @@ def handle_goal_command(text):
         return goal_summary(goal['id']) if goal else 'No unfinished goal.', None
     if not goal:
         raise ValueError("No unfinished goal.")
+    if command == 'run':
+        from goal_execution import validate_cycles
+        if not argument.isascii() or not argument.isdecimal():
+            raise ValueError("Usage: /goal run <cycles>; cycles must be 1–3.")
+        validate_cycles(int(argument))
+        store.require_active(goal['id'])
+        return goal_summary(goal['id']), goal['id']
     if command == 'resolve':
         values = argument.split()
         if len(values) != 2:
@@ -236,5 +243,5 @@ def handle_goal_command(text):
         if command == 'resume':
             return goal_summary(goal['id']), goal['id']
     else:
-        raise ValueError("Commands: /goal start <objective>, status, pause, resume [instruction], complete, cancel, resolve <action-id> succeeded|retry")
+        raise ValueError("Commands: /goal start <objective>, status, pause, resume [instruction], run <cycles>, complete, cancel, resolve <action-id> succeeded|retry")
     return goal_summary(goal['id']), None
