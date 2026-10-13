@@ -11,6 +11,9 @@ def check_permission(tool_name: str, target: str = "") -> bool:
     READ_TOOLS = {
     "list_directory",
     "read_file",
+    "discover_workspace",
+    "read_source",
+    "search_workspace",
     "search_memory",
     "recall_recent_activity",
     }
@@ -26,6 +29,9 @@ def check_permission(tool_name: str, target: str = "") -> bool:
     AUTONOMOUS_TOOLS = {
     "list_directory",
     "read_file",
+    "discover_workspace",
+    "read_source",
+    "search_workspace",
     "open_app",
     "run_terminal",
     "save_memory",

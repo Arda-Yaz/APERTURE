@@ -208,8 +208,24 @@ def goal_summary(goal_id):
     store = get_store()
     event_ids = [action['call_event_id'] for action in store.summary_actions(goal_id)
                  if action['call_event_id']]
+    actions = store.summary_actions(goal_id)
+    event_ids.extend(action['result_event_id'] for action in actions if action['result_event_id'])
     events = get_events_by_ids(event_ids) if event_ids else []
-    return store.summary(goal_id, evidence_events=events)
+    summary = store.summary(goal_id, evidence_events=events)
+    from workspace import INSPECTION_TOOLS, evidence_context
+    by_id = {event['id']: event for event in events}
+    evidence = []
+    for action in actions:
+        if action['tool_name'] in INSPECTION_TOOLS:
+            call = by_id.get(action['call_event_id'])
+            result = by_id.get(action['result_event_id'])
+            if call and result:
+                evidence.append(evidence_context(call, result, max_chars=10000))
+            else:
+                evidence.append('Inspection evidence unavailable; refs ' + str(action['call_event_id']) + '/' + str(action['result_event_id']))
+    while len(evidence) > 1 and sum(map(len, evidence)) > 16000:
+        evidence.pop(0)
+    return summary + ('\nSANITIZED WORKSPACE EVIDENCE (bounded excerpts):\n' + '\n'.join(evidence[-6:]) if evidence else '')
 
 
 def handle_goal_command(text):

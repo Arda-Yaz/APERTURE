@@ -36,6 +36,7 @@ from experience import (
     record_assistant_message,
     record_tool_call,
     record_tool_result,
+    get_events_by_ids,
     record_self_state_update,
     record_relationship_state_update,
     record_turn_stopped,
@@ -43,6 +44,9 @@ from experience import (
 )
 
 from tools import (
+    discover_workspace,
+    read_source,
+    search_workspace,
     list_directory,
     read_file,
     write_file,
@@ -85,6 +89,9 @@ ACTOR_OPTIONS = {
 # ============================================================
 
 BASE_TOOLS = [
+    discover_workspace,
+    read_source,
+    search_workspace,
     list_directory,
     read_file,
     write_file,
@@ -228,6 +235,9 @@ def get_tools_for_goal(
 
 
 TOOL_MAP = {
+    "discover_workspace": discover_workspace,
+    "read_source": read_source,
+    "search_workspace": search_workspace,
     "list_directory":
         list_directory,
 
@@ -640,6 +650,7 @@ def chat(
 
     if execution_session is not None:
         working_messages.append({'role': 'system', 'content': execution_session.context()})
+        observations.extend(execution_session.observations)
 
     used_action_tool = False
     memory_operation_used = False
@@ -811,9 +822,11 @@ Rules:
             elif not isinstance(arguments, dict):
                 result, result_status = "TOOL_ERROR: Arguments must be an object.", "error"
             else:
-                target = (arguments.get("path") or arguments.get("app_name")
+                target = ((str(arguments.get('root', '')) + ' :: ' + str(arguments.get('path', '.')))
+                          if tool_name in {'discover_workspace', 'read_source', 'search_workspace'} else
+                          (arguments.get("path") or arguments.get("app_name")
                           or arguments.get("cwd") or arguments.get("command")
-                          or arguments.get("memory_id") or "")
+                          or arguments.get("memory_id") or ""))
                 # Checkpoint only updates bound operational state; external tools
                 # retain the existing permission policy on every new dispatch.
                 allowed = tool_name == 'checkpoint_goal' or check_permission(tool_name, target)
@@ -844,11 +857,18 @@ Rules:
                         persistent_goal_id, tool_name, argument_dict, call_event['id'],
                     )
                 goal_store.finish_action(action_id, result_status, result_event['id'], result)
+            hydrated = {event['id']: event for event in get_events_by_ids([call_event['id'], result_event['id']])}
+            call_event = hydrated.get(call_event['id'], call_event)
+            result_event = hydrated.get(result_event['id'], result_event)
             if execution_session is not None:
-                execution_session.observe(tool_name, argument_dict, result, result_status)
+                execution_session.observe(tool_name, argument_dict, result, result_status,
+                                          call_event=call_event, result_event=result_event)
                 if execution_session.stop_reason:
                     return execution_stop_answer()
-            if tool_name == 'read_file' and result_status == 'ok':
+            if tool_name in {'discover_workspace', 'read_source', 'search_workspace'}:
+                from workspace import evidence_context
+                observations.append(evidence_context(call_event, result_event))
+            elif tool_name == 'read_file' and result_status == 'ok':
                 observations.append(f"EXACT_FILE_CONTENT:\n{result}")
             else:
                 observations.append(f"{tool_name} ({result_status}): {result}")

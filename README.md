@@ -1459,6 +1459,73 @@ or filesystem transaction spanning the SQLite checkpoint and external tool.
 
 ---
 
+# Bounded workspace inspection
+
+The actor can inspect an explicitly selected project root with three dedicated
+read-only tools: `discover_workspace`, `search_workspace`, and `read_source`.
+Discovery returns deterministic relative paths with pagination; literal search
+returns matching file/line locations; source reading retrieves numbered ranges,
+including later portions of a file. The existing general file and terminal tools
+keep their behavior.
+
+```python
+discover_workspace(root, path=".", limit=100, continuation="")
+search_workspace(root, query, path=".", limit=30, continuation="")
+read_source(root, path, start_line=1, line_count=50, continuation="")
+```
+
+Pass a returned `continuation` unchanged with the same inspection arguments.
+Search is case-sensitive literal UTF-8 text search. Source reading is strict
+UTF-8 and returns fragments of very long lines with their original line number
+and byte positions.
+Results are JSON strings with source identity and coverage before evidence.
+
+| Resource | Per-call bound |
+| --- | --- |
+| Directory snapshot | 256 entries; oversized directories skipped |
+| Traversal | 1,024 entries, depth 8 |
+| Source/search input | 1 MiB scanned |
+| Individual line fragment | 1,024 bytes |
+| Discovery page | 100 entries |
+| Source page | 50 lines |
+| Search page | 30 matches |
+| Search files visited | 200 |
+| Serialized evidence / result | 7,000 / 16,000 characters |
+| Continuation cursor | 3,000 characters |
+
+For example, explicitly authorize project inspection through a persistent goal:
+
+```text
+/goal start Inspect C:\Users\Gaming\Documents\Aperture, locate its entry point and persistence layer, and explain the architecture using file and line references.
+/goal run 3
+/goal status
+```
+
+The actor can discover files under that root, search for a symbol such as
+`sqlite3.connect`, then read relevant source ranges and cite the returned paths
+and line numbers. A tool result's continuation position supports the next page;
+the actor should narrow to a relevant subdirectory or file when coverage limits
+are reached. Execution still permits at most three cycles, twelve total tool
+attempts, and eight actor steps per cycle. Pagination provides new observations,
+not proof of completion. Only the user's `/goal complete` confirms completion.
+
+AUTONOMOUS and BALANCED allow these read-only tools; SAFE requests permission.
+Root containment checks apply separately from permissions. Root-relative targets
+cannot escape the selected root or traverse symlinks/junctions. Generated,
+dependency, VCS, binary, and conventional sensitive paths are excluded; results
+report skipped or incomplete coverage. These exclusions are a heuristic, not a
+comprehensive secret detector.
+
+Source observations retain paths, ranges, coverage, continuation details, and
+Experience call/result references in bounded actor and controller context.
+Source text remains evidence, not instructions or authorization. Retained
+excerpts may be shorter than the original tool result; omitted evidence must be
+reread before drawing conclusions that depend on it. Pagination assumes an
+unchanged workspace and provides no snapshot guarantee. Path checks also do not
+provide a race-proof sandbox against concurrent hostile filesystem changes.
+
+---
+
 # Current Limitations
 
 APERTURE is still experimental.

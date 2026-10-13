@@ -1,4 +1,5 @@
 import sys
+import json
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -216,6 +217,119 @@ class ExecutionTests(unittest.TestCase):
             llm.chat([{'role': 'user', 'content': 'hello'}])
         actor.assert_called_once()
         store.assert_not_called()
+
+    def test_real_workspace_tools_e2e_and_cross_cycle_controller_evidence(self):
+        fixture = self.root / 'project'
+        fixture.mkdir()
+        (fixture / 'main.py').write_text('from persistence import Store\nStore()\n', encoding='utf-8')
+        (fixture / 'persistence.py').write_text('import sqlite3\nclass Store:\n    pass\n', encoding='utf-8')
+        root = str(fixture)
+        captures, controller = [], []
+        responses = iter([
+            response(calls=[('discover_workspace', {'root': root, 'limit': 1})]), response('Found main.py.'),
+            response(calls=[('search_workspace', {'root': root, 'query': 'class Store'})]), response('Store is in persistence.py:2.'),
+            response(calls=[('read_source', {'root': root, 'path': 'persistence.py', 'start_line': 1, 'line_count': 3}),
+                            ('read_source', {'root': root, 'path': 'main.py', 'line_count': 2})]),
+            response('main.py is the entry point; persistence.py:1 imports sqlite3 and persistence.py:2 defines Store.')])
+        def actor(**kwargs):
+            captures.append([dict(m) for m in kwargs['messages'] if isinstance(m, dict)])
+            return next(responses)
+        def judge(**kwargs):
+            controller.append(kwargs['observations'])
+            return True
+        with patch.object(llm, 'is_task_complete', side_effect=judge):
+            result, actor_mock, _ = self.run_session(3, actor)
+        self.assertEqual(actor_mock.call_count, 6)
+        self.assertEqual(len(self.store.actions(self.goal_id)), 4)
+        self.assertEqual(self.store.get(self.goal_id)['status'], 'active')
+        self.assertIn('cycle budget exhausted', result)
+        later = '\n'.join(message['content'] for message in captures[4] if message['role'] == 'system')
+        for value in ['main.py', 'persistence.py', 'continuation', 'call_event_id', 'result_event_id', json.dumps(root)[1:-1]]:
+            self.assertIn(value, later)
+            self.assertIn(value, controller[-1])
+        self.assertIn('requested_start', controller[-1])
+        self.assertIn('from persistence import Store', controller[-1])
+        self.assertIn('Store()', controller[-1])
+        for tool, target in self.permission.call_args_list:
+            self.assertIn(root, tool[1])
+        with patch.object(goals, '_STORE', goals.GoalStore(self.store.db_path)):
+            summary = goals.goal_summary(self.goal_id)
+        self.assertIn('class Store', summary)
+        self.assertIn('requested_start', summary)
+        self.assertIn('SANITIZED WORKSPACE EVIDENCE', summary)
+
+    def test_workspace_error_and_denial_stop_same_batch_count_attempts(self):
+        for denial in [False, True]:
+            with self.subTest(denial=denial):
+                self.permission.return_value = not denial
+                previous = len(self.store.actions(self.goal_id))
+                result, actor, _ = self.run_session(3, [response(calls=[
+                    ('read_source', {'root': str(self.root), 'path': 'missing.py'}),
+                    ('read_file', {'path': 'should-not-run'})])])
+                self.read.assert_not_called()
+                self.assertEqual(actor.call_count, 1)
+                self.assertEqual(len(self.store.actions(self.goal_id)), previous + 1)
+                self.assertIn('permission denied' if denial else 'tool error', result)
+                self.assertEqual(self.store.actions(self.goal_id)[-1]['status'], 'permission_denied' if denial else 'error')
+
+    def test_session_uses_sanitized_events_and_bounds_retained_evidence(self):
+        session = execution.ExecutionSession(self.goal_id, 3, 'fixture')
+        for index in range(12):
+            call = {'id': f'call{index}', 'metadata': {'tool_name': 'read_source',
+                    'arguments': {'root': str(self.root), 'path': 'a.py', 'secret': '[REDACTED]'}}}
+            result = {'id': f'result{index}', 'content': json.dumps({'tool': 'read_source',
+                      'root': str(self.root), 'path': 'a.py', 'status': 'ok',
+                      'continuation': 'next-position', 'range': {'returned_start': index},
+                      'coverage': {'complete': False}, 'evidence': [{'text': 'x' * 15000}]}),
+                      'metadata': {'status': 'ok'}}
+            session.observe('read_source', {'path': str(index), 'secret': 'raw-secret'},
+                            'raw' + str(index), 'ok', call_event=call, result_event=result)
+        context = session.context()
+        self.assertLessEqual(sum(map(len, session.observations)), 16000)
+        self.assertNotIn('raw-secret', context)
+        self.assertIn('metadata_omitted', context)
+        self.assertIn('next-position', context)
+        self.assertIn('call11', context)
+        self.assertIn('result11', context)
+        self.assertIn('evidence_excerpt_truncated', context)
+        self.assertEqual(len(session.seen), 12)
+
+    def test_large_write_arguments_remain_referenced_without_unbounded_context(self):
+        session = execution.ExecutionSession(self.goal_id, 3, 'fixture')
+        call = {'id': 'large_call', 'metadata': {'tool_name': 'write_file',
+                'arguments': {'path': 'report.txt', 'content': 'x' * 20000}}}
+        result = {'id': 'large_result', 'content': 'File written', 'metadata': {'status': 'ok'}}
+        session.observe('write_file', {'path': 'report.txt'}, 'File written', 'ok',
+                        call_event=call, result_event=result)
+        self.assertLessEqual(len(session.observations[0]), 10000)
+        self.assertLessEqual(sum(map(len, session.observations)), 16000)
+        decoded = json.loads(session.observations[0])
+        self.assertEqual(decoded['arguments'], {'path': 'report.txt'})
+        self.assertEqual(decoded['call_event_id'], 'large_call')
+        self.assertEqual(decoded['result_event_id'], 'large_result')
+        self.assertEqual(decoded['status'], 'ok')
+        self.assertTrue(decoded['arguments_fingerprint'])
+        self.assertTrue(decoded['metadata_omitted'])
+
+    def test_large_inspection_metadata_bound_preserves_usable_cursor(self):
+        from workspace import evidence_context
+        call = {'id': 'inspection_call', 'metadata': {'tool_name': 'search_workspace',
+                'arguments': {'root': str(self.root), 'path': '.', 'query': 'symbol'}}}
+        cursor = json.dumps({'root': str(self.root), 'position': 'x' * 2500})
+        result = {'id': 'inspection_result', 'content': json.dumps({
+                  'root': str(self.root), 'path': '.', 'query': 'symbol',
+                  'status': 'ok', 'continuation': cursor, 'truncated': True,
+                  'coverage': {'complete': False, 'skipped': ['huge' * 10000]},
+                  'evidence': [{'path': 'source.py', 'line': 42, 'text': 'symbol' * 10000}]}),
+                  'metadata': {'status': 'ok'}}
+        context = evidence_context(call, result, max_chars=10000)
+        self.assertLessEqual(len(context), 10000)
+        decoded = json.loads(context)
+        self.assertEqual(decoded['inspection']['continuation'], cursor)
+        self.assertEqual(decoded['inspection']['root'], str(self.root))
+        self.assertFalse(decoded['inspection']['coverage']['complete'])
+        self.assertTrue(decoded['evidence_excerpt_truncated'])
+        self.assertTrue(decoded['metadata_omitted'])
 
 
 if __name__ == '__main__':

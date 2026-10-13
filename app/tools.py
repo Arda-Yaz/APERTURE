@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import subprocess
 import shutil
+from workspace import discover_workspace, read_source, search_workspace
 
 def get_downloads_folder() -> Path:
     userprofile = Path(os.environ["USERPROFILE"])
