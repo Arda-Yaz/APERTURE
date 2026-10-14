@@ -788,19 +788,13 @@ user goal succeeded
 - real tool observations,
 - the candidate answer.
 
-It returns:
+It returns a strictly validated assessment with `status` (`satisfied`,
+`incomplete`, or `insufficient_evidence`), a bounded `rationale`, supplied
+`evidence_refs`, and actionable `missing_requirements`. Malformed output or
+unavailable inference stops conservatively.
 
-```json
-{"done": true}
-```
-
-or:
-
-```json
-{"done": false}
-```
-
-If incomplete, the agent loop continues.
+Incomplete work may continue within existing safety, novelty, and resource
+limits. Satisfaction stops a bounded run; only the user completes a persistent goal.
 
 ### Result
 
@@ -820,14 +814,10 @@ The model treated tool output as another conversational message instead of privi
 
 ### Solution
 
-File reads are stored in the agent's internal observation stream as:
-
-```text
-EXACT_FILE_CONTENT:
-...
-```
-
-The Task Controller and runtime instructions state that tool observations are the source of truth.
+The actor receives file tool results in its working conversation. The Task
+Controller receives bounded sanitized Experience call/result pairs with event
+references and explicit truncation metadata. Successful observed results may
+support an assessment; assistant claims do not become independent evidence.
 
 ### Result
 
@@ -1509,6 +1499,30 @@ are reached. Execution still permits at most three cycles, twelve total tool
 attempts, and eight actor steps per cycle. Pagination provides new observations,
 not proof of completion. Only the user's `/goal complete` confirms completion.
 
+Bounded execution uses a strict, evidence-backed task assessment at each candidate
+answer. The outcomes are `satisfied`, `incomplete`, and `insufficient_evidence`;
+malformed assessments and unavailable inference stop conservatively. Satisfaction
+stops the current run immediately and preserves the substantive answer alongside
+its stop reason. The persistent goal remains active until the user issues
+`/goal complete`; assessment supplies neither authorization nor automatic completion.
+
+The controller receives bounded sanitized Experience call/result pairs, retaining
+source ranges, coverage and truncation metadata. Only supplied successful observed
+result IDs can support satisfaction. Assistant claims, checkpoint reports/plans,
+failed attempts and recalled or derived context are separate, ineligible support.
+Partial search coverage cannot establish absence; a narrow positive finding may
+still be supported. These structural checks do not prove the model's semantic judgment.
+
+A bounded run assesses the first candidate even when it used no new action tool.
+Only incomplete work may continue under the existing novelty, safety and resource
+checks. Safety and mutation reconciliation take priority before and after inference.
+There is at most one assessment inference per cycle and three per run, alongside
+at most eight actor steps per cycle and twelve shared tool attempts. Unchanged
+objective/candidate/evidence inputs reuse a session-local assessment. Ordinary
+conversation without action tools does not invoke the controller. Assessment history is derived Experience;
+lifecycle stops are system events. Restart preserves history without restoring
+execution authorization or reusing a previous run's success verdict.
+
 AUTONOMOUS and BALANCED allow these read-only tools; SAFE requests permission.
 Root containment checks apply separately from permissions. Root-relative targets
 cannot escape the selected root or traverse symlinks/junctions. Generated,
@@ -1569,9 +1583,9 @@ Permission categories are currently hard-coded and will require more granular po
 
 ### Task Controller is v0.1
 
-The completion judge is useful but still intentionally simple.
-
-Its fallback behavior and determinism can be improved.
+The controller validates structure and evidence eligibility, but its semantic
+judgment remains fallible. Mocked regression tests do not establish live-model
+assessment accuracy.
 
 ### Lexical memory retrieval
 

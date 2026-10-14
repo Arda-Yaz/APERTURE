@@ -13,6 +13,7 @@ safety.install_guards()
 import experience
 import goals
 import llm
+from task_controller import Assessment
 import main
 
 
@@ -39,7 +40,7 @@ class GoalTests(unittest.TestCase):
         self.stack.enter_context(patch.object(llm, 'maybe_reflect', return_value=None))
         self.stack.enter_context(patch.object(llm, 'ENABLE_DYNAMIC_SELF', False))
         self.stack.enter_context(patch.object(llm, 'ENABLE_RELATIONSHIP', False))
-        self.stack.enter_context(patch.object(llm, 'is_task_complete', return_value=True))
+        self.stack.enter_context(patch.object(llm, 'assess_task', return_value=Assessment('insufficient_evidence', 'Not verified.')))
         self.permission = self.stack.enter_context(patch.object(llm, 'check_permission', return_value=True))
         self.stack.enter_context(patch('builtins.print'))
 

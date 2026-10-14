@@ -1,4 +1,6 @@
 import re
+import json
+import hashlib
 
 from goals import get_store, goal_summary
 
@@ -40,6 +42,7 @@ from experience import (
     record_self_state_update,
     record_relationship_state_update,
     record_turn_stopped,
+    record_event,
     recall_recent_activity,
 )
 
@@ -55,7 +58,7 @@ from tools import (
 )
 
 from permissions import check_permission
-from task_controller import is_task_complete
+from task_controller import assess_task, EvidenceBundle
 
 from memory import (
     save_memory,
@@ -630,7 +633,6 @@ def chat(
         )
     )
 
-    observations = []
     controller_goal = goal
     if goal_store is not None:
         controller_goal = persistent_goal['objective'] + "\nCurrent resume instruction: " + goal
@@ -646,12 +648,12 @@ def chat(
                 "to record progress and remaining work. Only /goal complete from "
                 "the user ends the persistent goal.",
         })
-        observations.append(saved_context)
 
     if execution_session is not None:
         working_messages.append({'role': 'system', 'content': execution_session.context()})
-        observations.extend(execution_session.observations)
 
+    evidence = execution_session.evidence if execution_session is not None else EvidenceBundle()
+    assessment_cache = execution_session.assessment_cache if execution_session is not None else {}
     used_action_tool = False
     memory_operation_used = False
 
@@ -698,79 +700,53 @@ def chat(
                 or ""
             )
 
-            # Normal sohbet
-            if not used_action_tool:
-
-                return finalize_answer(
-                    messages,
-                    answer,
-                    turn_id=turn_id,
-                    used_action_tool=(
-                        used_action_tool
-                    ),
-                    memory_operation_used=(
-                        memory_operation_used
-                    ),
-                )
-
-            # Tool kullanıldıysa görev
-            # gerçekten tamamlandı mı?
+            # Ordinary conversation stays lightweight. Bounded goal candidates
+            # are assessed even without a new action or any supporting evidence.
+            if not used_action_tool and execution_session is None and persistent_goal_id is None:
+                return finalize_answer(messages, answer, turn_id=turn_id,
+                                       used_action_tool=used_action_tool,
+                                       memory_operation_used=memory_operation_used)
             if execution_session is not None and not execution_session.check():
                 return execution_stop_answer()
-            complete = (
-                is_task_complete(
-                    goal=controller_goal,
-                    answer=answer,
-                    observations=(
-                        "\n\n".join(
-                            observations
-                        )
-                    ),
-                )
-            )
-
-            if complete:
-
-                return finalize_answer(
-                    messages,
-                    answer,
-                    turn_id=turn_id,
-                    used_action_tool=(
-                        used_action_tool
-                    ),
-                    memory_operation_used=(
-                        memory_operation_used
-                    ),
-                )
-
-            # Controller cevabı reddetti.
-            working_messages.append({
-                "role": "system",
-                "content": f"""
-TASK CONTROLLER:
-
-Your previous response did NOT correctly complete the user's request.
-
-ORIGINAL USER GOAL:
-{controller_goal}
-
-ACTUAL TOOL OBSERVATIONS:
-{chr(10).join(observations)}
-
-Continue working until the original goal is actually completed.
-
-Rules:
-- Tool observations are the source of truth.
-- Do not invent information.
-- Do not use placeholders.
-- Do not tell the user how to do something if you can do it yourself.
-- If another tool is needed, use it.
-- If the requested information is already present in the observations,
-  answer directly using that information.
-- Keep the final response concise and natural.
-"""
-            })
-
+            if goal_store is not None:
+                persistent_goal = goal_store.get(persistent_goal_id)
+            reports = ({'progress': persistent_goal['progress'][:2000],
+                        'next_action': persistent_goal['next_action'][:2000]}
+                       if persistent_goal is not None else None)
+            fingerprint = hashlib.sha256(json.dumps(
+                [controller_goal, answer, evidence.payload(), reports],
+                ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+            cached = fingerprint in assessment_cache
+            assessment = assessment_cache.get(fingerprint)
+            if assessment is None:
+                assessment = assess_task(controller_goal, answer, evidence, reports=reports)
+                assessment_cache[fingerprint] = assessment
+            record_event(event_type='task_assessment', event_class='derived', actor='task_controller',
+                         turn_id=turn_id, content=assessment.rationale,
+                         metadata={'goal_id': persistent_goal_id, 'assessment': assessment.as_dict(),
+                                   'input_fingerprint': fingerprint, 'cached': cached,
+                                   'supplied_result_ids': sorted(evidence.supplied_refs),
+                                   'eligible_result_ids': sorted(evidence.eligible_refs),
+                                   'omitted_pairs': evidence.omitted})
+            # Safety can change during inference; it always wins over a verdict.
+            if execution_session is not None:
+                execution_session.final_answer = answer
+                if not execution_session.check():
+                    return execution_stop_answer()
+                finalized = finalize_answer(messages, answer, turn_id=turn_id,
+                                            used_action_tool=used_action_tool,
+                                            memory_operation_used=memory_operation_used)
+                if execution_session.check():
+                    execution_session.accept_assessment(assessment)
+                return finalized
+            if assessment.status != 'incomplete' or cached:
+                return finalize_answer(messages, answer, turn_id=turn_id,
+                                       used_action_tool=used_action_tool,
+                                       memory_operation_used=memory_operation_used)
+            working_messages.append({'role': 'system', 'content':
+                'TASK ASSESSMENT (fallible interpretation, not authorization): ' +
+                json.dumps(assessment.as_dict(), ensure_ascii=False) +
+                '\nContinue within the existing permissions and budgets. Use observations, not unsupported claims.'})
             continue
 
         # ====================================================
@@ -858,21 +834,14 @@ Rules:
                     )
                 goal_store.finish_action(action_id, result_status, result_event['id'], result)
             hydrated = {event['id']: event for event in get_events_by_ids([call_event['id'], result_event['id']])}
-            call_event = hydrated.get(call_event['id'], call_event)
-            result_event = hydrated.get(result_event['id'], result_event)
+            call_event = hydrated.get(call_event['id'])
+            result_event = hydrated.get(result_event['id'])
+            evidence.add(call_event, result_event)
             if execution_session is not None:
                 execution_session.observe(tool_name, argument_dict, result, result_status,
                                           call_event=call_event, result_event=result_event)
                 if execution_session.stop_reason:
                     return execution_stop_answer()
-            if tool_name in {'discover_workspace', 'read_source', 'search_workspace'}:
-                from workspace import evidence_context
-                observations.append(evidence_context(call_event, result_event))
-            elif tool_name == 'read_file' and result_status == 'ok':
-                observations.append(f"EXACT_FILE_CONTENT:\n{result}")
-            else:
-                observations.append(f"{tool_name} ({result_status}): {result}")
-
             # Tool sonucunu sadece
             # çalışma geçmişine ekle.
             working_messages.append({

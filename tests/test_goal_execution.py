@@ -14,6 +14,8 @@ import experience
 import goals
 import goal_execution as execution
 import llm
+from task_controller import Assessment
+import task_controller
 import main
 
 
@@ -40,7 +42,7 @@ class ExecutionTests(unittest.TestCase):
             self.stack.enter_context(patch.object(module, name, value))
         self.stack.enter_context(patch.object(llm, 'inject_runtime_context', side_effect=lambda messages, **kw: list(messages)))
         self.stack.enter_context(patch.object(llm, 'maybe_reflect', return_value=None))
-        self.stack.enter_context(patch.object(llm, 'is_task_complete', return_value=True))
+        self.judge = self.stack.enter_context(patch.object(llm, 'assess_task', return_value=Assessment('incomplete', 'More work remains.', (), ('Finish report.',))))
         self.permission = self.stack.enter_context(patch.object(llm, 'check_permission', return_value=True))
         self.output = self.stack.enter_context(patch('builtins.print'))
         self.goal_id = self.store.create('Inspect files and produce report')['id']
@@ -65,6 +67,9 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(self.store.get(self.goal_id)['status'], 'active')
 
     def test_three_cycles_grounded_context_and_single_authorization(self):
+        self.judge.side_effect = [Assessment('incomplete', 'Inspect more.', (), ('More files.',)),
+                                  Assessment('incomplete', 'Inspect more.', (), ('More files.',)),
+                                  Assessment('satisfied', 'Report supported.', ('fixture',))]
         captured = []
         responses = iter(self.read_cycle('first') + self.read_cycle('second') + self.read_cycle('third'))
         def actor(**kwargs):
@@ -73,7 +78,7 @@ class ExecutionTests(unittest.TestCase):
         result, calls, messages = self.run_session(3, actor)
         self.assertEqual(calls.call_count, 6)
         self.assertEqual(self.read.call_count, 3)
-        self.assertIn('cycle budget exhausted', result)
+        self.assertIn('objective assessed satisfied', result)
         second_context = '\n'.join(m['content'] for m in captured[2] if m['role'] == 'system')
         self.assertIn('observed content', second_context)
         self.assertIn('Inspect files and produce report', second_context)
@@ -84,6 +89,112 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(len(user), 1)
         self.assertEqual(user[0]['content'], '/goal run 3')
         self.assertTrue(all(e['actor'] == 'system' and e['event_class'] == 'system' for e in events if e['event_type'].startswith('goal_execution_')))
+
+    def actual_controller(self, statuses):
+        self.judge.side_effect = task_controller.assess_task
+        queue = iter(statuses)
+        def infer(**kwargs):
+            payload = json.loads(kwargs['messages'][1]['content'])
+            refs = [entry['evidence']['result_event_id'] for entry in payload['evidence']['entries']
+                    if entry['category'] == 'successful_observations']
+            status = next(queue)
+            return response(json.dumps({'status': status, 'rationale': 'Assessment over supplied observations.',
+                            'evidence_refs': refs if status == 'satisfied' else [],
+                            'missing_requirements': ['Finish report.'] if status == 'incomplete' else []}))
+        return patch.object(task_controller, 'ollama_chat', side_effect=infer)
+
+    def test_supported_satisfaction_stops_first_cycle_and_preserves_answer(self):
+        with self.actual_controller(['satisfied']) as controller:
+            result, actor, _ = self.run_session(3, self.read_cycle('first'))
+        self.assertIn('Cycle done', result)
+        self.assertIn('objective assessed satisfied', result)
+        self.assertEqual(actor.call_count, 2)
+        self.assertEqual(controller.call_count, 1)
+        self.assertEqual(self.read.call_count, 1)
+        self.assertEqual(self.store.get(self.goal_id)['status'], 'active')
+        events = experience.get_episode_events(experience._CURRENT_EPISODE_ID, limit=100)
+        assessments = [e for e in events if e['event_type'] == 'task_assessment']
+        self.assertEqual(len(assessments), 1)
+        self.assertEqual(assessments[0]['event_class'], 'derived')
+        self.assertTrue(assessments[0]['metadata']['assessment']['evidence_refs'])
+        # Explicit authorization creates a fresh session, not a restored verdict.
+        with self.actual_controller(['insufficient_evidence']) as controller:
+            result, actor, _ = self.run_session(3, [response('Claim after restart')])
+        self.assertIn('insufficient_evidence', result)
+        self.assertEqual(controller.call_count, 1)
+
+    def test_later_no_action_candidate_uses_retained_evidence(self):
+        with self.actual_controller(['incomplete', 'satisfied']) as controller:
+            result, actor, _ = self.run_session(3, self.read_cycle('first') + [response('Supported report')])
+        self.assertIn('Supported report', result)
+        self.assertIn('objective assessed satisfied', result)
+        self.assertEqual(actor.call_count, 3)
+        self.assertEqual(self.read.call_count, 1)
+        self.assertEqual(controller.call_count, 2)
+        inputs = [json.loads(call.kwargs['messages'][1]['content']) for call in controller.call_args_list]
+        self.assertEqual(inputs[0]['evidence'], inputs[1]['evidence'])
+
+    def test_unsupported_claim_checkpoint_and_failed_inference_stop(self):
+        for calls in [[], [('checkpoint_goal', {'progress': 'Everything done', 'next_action': ''})]]:
+            with self.subTest(calls=calls), self.actual_controller(['satisfied']) as controller:
+                sequence = ([response(calls=calls)] if calls else []) + [response('All done')]
+                result, actor, _ = self.run_session(3, sequence)
+                self.assertIn('task assessment invalid', result)
+                self.assertEqual(actor.call_count, len(sequence))
+                self.assertEqual(controller.call_count, 1)
+        self.judge.side_effect = task_controller.assess_task
+        with patch.object(task_controller, 'ollama_chat', side_effect=RuntimeError('offline')) as controller:
+            result, actor, _ = self.run_session(3, self.read_cycle('failure'))
+        self.assertIn('task assessment unavailable', result)
+        self.assertEqual(controller.call_count, 1)
+        self.assertEqual(actor.call_count, 2)
+
+    def test_safety_changes_during_assessment_override_satisfaction(self):
+        def assess(*args, **kwargs):
+            self.store.transition(self.goal_id, 'paused')
+            return Assessment('satisfied', 'Observed.', tuple(args[2].eligible_refs))
+        self.judge.side_effect = assess
+        result, actor, _ = self.run_session(3, self.read_cycle('first'))
+        self.assertIn('goal is inactive', result)
+        self.assertNotIn('Stopped: objective assessed satisfied', result)
+        self.assertEqual(actor.call_count, 2)
+
+    def test_finalization_interrupt_or_recording_failure_overrides_satisfaction(self):
+        for name, error, reason in [('maybe_reflect', KeyboardInterrupt(), 'user interrupted'),
+                                    ('record_assistant_message', RuntimeError('disk full'), 'execution error')]:
+            with self.subTest(name=name), self.actual_controller(['satisfied']) as controller, \
+                    patch.object(llm, name, side_effect=error):
+                result, actor, _ = self.run_session(3, self.read_cycle(name))
+            self.assertIn('Cycle done', result)
+            self.assertIn(reason, result)
+            self.assertNotIn('Stopped: objective assessed satisfied', result)
+            self.assertEqual(actor.call_count, 2)
+            self.assertEqual(controller.call_count, 1)
+            self.assertEqual(self.store.get(self.goal_id)['status'], 'active')
+            events = experience.get_episode_events(experience._CURRENT_EPISODE_ID, limit=100)
+            stops = [event for event in events if event['event_type'] == 'goal_execution_stopped']
+            self.assertIn(reason, stops[-1]['content'])
+            self.assertEqual(stops[-1]['event_class'], 'system')
+
+    def test_finalization_safety_change_overrides_satisfaction(self):
+        def deactivate(*args, **kwargs):
+            self.store.transition(self.goal_id, 'paused')
+        with self.actual_controller(['satisfied']), patch.object(llm, 'maybe_reflect', side_effect=deactivate):
+            result, actor, _ = self.run_session(3, self.read_cycle('first'))
+        self.assertIn('goal is inactive', result)
+        self.assertIn('Cycle done', result)
+        self.assertNotIn('Stopped: objective assessed satisfied', result)
+        self.assertEqual(actor.call_count, 2)
+
+    def test_unchanged_candidate_evidence_is_cached(self):
+        with self.actual_controller(['incomplete']) as controller:
+            result, actor, _ = self.run_session(3, self.read_cycle('first') + [response('Cycle done')])
+        self.assertEqual(controller.call_count, 1)
+        self.assertEqual(actor.call_count, 3)
+        self.assertIn('no new meaningful tool observations', result)
+        events = experience.get_episode_events(experience._CURRENT_EPISODE_ID, limit=100)
+        assessments = [e for e in events if e['event_type'] == 'task_assessment']
+        self.assertEqual([e['metadata']['cached'] for e in assessments], [False, True])
 
     def test_invalid_budgets_and_inactive_goals(self):
         for value in ('', '0', '-1', '4', '1.5', '1 extra', '+1', '٣'):
@@ -217,6 +328,7 @@ class ExecutionTests(unittest.TestCase):
             llm.chat([{'role': 'user', 'content': 'hello'}])
         actor.assert_called_once()
         store.assert_not_called()
+        self.judge.assert_not_called()
 
     def test_real_workspace_tools_e2e_and_cross_cycle_controller_evidence(self):
         fixture = self.root / 'project'
@@ -234,15 +346,18 @@ class ExecutionTests(unittest.TestCase):
         def actor(**kwargs):
             captures.append([dict(m) for m in kwargs['messages'] if isinstance(m, dict)])
             return next(responses)
-        def judge(**kwargs):
-            controller.append(kwargs['observations'])
-            return True
-        with patch.object(llm, 'is_task_complete', side_effect=judge):
+        def judge(goal, answer, evidence, **kwargs):
+            kwargs['evidence'] = evidence
+            controller.append(json.dumps(kwargs['evidence'].payload()))
+            return Assessment('satisfied' if len(controller) == 3 else 'incomplete', 'Evidence assessed.',
+                              tuple(kwargs['evidence'].eligible_refs) if len(controller) == 3 else (),
+                              () if len(controller) == 3 else ('Inspect remaining files.',))
+        with patch.object(llm, 'assess_task', side_effect=judge):
             result, actor_mock, _ = self.run_session(3, actor)
         self.assertEqual(actor_mock.call_count, 6)
         self.assertEqual(len(self.store.actions(self.goal_id)), 4)
         self.assertEqual(self.store.get(self.goal_id)['status'], 'active')
-        self.assertIn('cycle budget exhausted', result)
+        self.assertIn('objective assessed satisfied', result)
         later = '\n'.join(message['content'] for message in captures[4] if message['role'] == 'system')
         for value in ['main.py', 'persistence.py', 'continuation', 'call_event_id', 'result_event_id', json.dumps(root)[1:-1]]:
             self.assertIn(value, later)
