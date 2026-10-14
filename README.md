@@ -1540,6 +1540,94 @@ provide a race-proof sandbox against concurrent hostile filesystem changes.
 
 ---
 
+# Bounded, verified workspace text writes
+
+Three scoped tools support small reports and whole-file configuration updates:
+
+```python
+snapshot_text(root, path)
+create_text(root, path, content)
+update_text(root, path, content, expected_fingerprint)
+```
+
+`root` is an explicit absolute directory and `path` is relative to it. Parent
+directories must already exist. These tools reject traversal, drive/UNC escapes,
+alternate data streams, reserved names, links/junctions, and conventional protected
+paths, including protected directories selected as roots. Exclusions are a
+heuristic, not a comprehensive secret detector. The existing general tools retain
+their behavior.
+
+Snapshots and replacement content are limited to **4,096 encoded bytes**. Only
+strict UTF-8 text is supported; binary control characters other than tab, CR, and
+LF are rejected. A UTF-8 BOM remains U+FEFF in returned content. Encoding supplied
+content preserves its BOM and literal LF, CRLF, lone CR, or mixed newlines without
+normalization. Whole-file updates must explicitly preserve unrelated content.
+
+`snapshot_text` returns complete content, canonical root/relative path, encoding,
+BOM presence, byte size, and a SHA-256 fingerprint of the **complete raw bytes**.
+Oversized, invalid, partial, or detectably changing reads return no qualifying
+fingerprint. Multiply linked and Windows read-only files are also rejected from
+this update snapshot path. Existing paginated source excerpts do not provide this fingerprint.
+Source content remains untrusted evidence and cannot authorize a write.
+
+For example, explicitly authorize an update through a persistent goal:
+
+```text
+/goal start Inspect C:\Projects\Example\settings.json with snapshot_text, then update only the requested setting with update_text using the returned fingerprint. Stop if the file changed.
+/goal run 3
+```
+
+To create a report, request `create_text` at a relative target such as
+`reports/architecture.md`; the `reports` directory must already exist. New writes
+require an active persistent goal invoked through `/goal resume` or `/goal run`.
+This lets APERTURE commit pending intent before filesystem effects without another
+storage schema. Snapshot acquisition is read-only and is also available in ordinary
+chat. AUTONOMOUS and BALANCED permit snapshots; SAFE asks. **All permission modes
+ask for each new write**, showing root and target. A goal does not grant blanket
+write permission.
+
+Pass the returned lowercase 64-character SHA-256 digest unchanged as
+`expected_fingerprint`.
+
+Creation publishes prepared temporary bytes without replacing an existing target,
+including a target that appears immediately before publication. Updating requires
+the expected SHA-256 fingerprint and repeats a bounded content/identity check
+before replacement. An existing creation target or stale update fingerprint returns
+`conflict` with no publication. Invalid arguments or a proven failure before
+publication return `rejected`. These outcomes stop the current actor invocation or
+bounded run without automatic retry or fallback to terminal/legacy writes, and do
+not by themselves require mutation reconciliation.
+
+Prepared content uses exclusive temporary storage in the selected parent directory.
+Only the owned temporary pathname is cleaned up. Successful writes return
+`verified` only after reading the target back and checking exact bytes and their
+fingerprint. Verification facts and Experience references remain available to task
+assessment. They establish the bytes observed at readback; they do not establish
+that the content semantically fulfills the entire objective or remains unchanged
+afterward. Only `/goal complete` completes the persistent goal.
+
+Publication followed by failed verification returns `error` with uncertain mutation
+effects; interrupted result recording leaves the action pending. Existing
+pending/error replay protection blocks further
+mutations until inspection and explicit `/goal resolve <action-id> succeeded|retry`.
+An identical successful write is blocked from replay across restart. Restart never
+restores execution authorization. Existing limits remain three cycles, twelve tool
+attempts per run, and eight actor steps per cycle.
+
+Replacement changes file identity. Ordinary mode bits are preserved where supported;
+Windows read-only and multiply linked update targets are rejected. Windows replacement may
+inherit directory ACLs/ownership and change extended metadata, attributes, or alternate
+streams; this tool does not preserve all filesystem metadata. Use it for ordinary
+workspace text files whose metadata does not require specialized preservation.
+
+Publication is atomic, but the hash recheck followed by replacement is **not atomic
+compare-and-swap**: another writer can change the target in the final check/replacement
+window. Root/ancestor rechecks likewise do not provide a race-proof sandbox against
+hostile filesystem substitution. Use a normal local workspace without competing
+writers. Atomic publication and readback verification do not establish crash durability.
+
+---
+
 # Current Limitations
 
 APERTURE is still experimental.

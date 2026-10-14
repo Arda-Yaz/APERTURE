@@ -10,7 +10,7 @@ import uuid
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "aperture_goals.db"
 _STORE = None
 MUTATING_TOOLS = {"write_file", "run_terminal", "open_app", "save_memory",
-                  "save_self_memory", "forget_memory"}
+                  "save_self_memory", "forget_memory", "create_text", "update_text"}
 
 
 def _now():
@@ -27,7 +27,7 @@ def _operation_detail(arguments):
     if not isinstance(arguments, dict):
         return str(arguments)[:400]
     parts = []
-    priority = {'path':400, 'command':500, 'app_name':80, 'memory_id':80, 'cwd':200}
+    priority = {'root':512, 'path':512, 'command':500, 'app_name':80, 'memory_id':80, 'cwd':200}
     for key, budget in priority.items():
         if key in arguments:
             value = (arguments[key] if isinstance(arguments[key], str)
@@ -212,11 +212,11 @@ def goal_summary(goal_id):
     event_ids.extend(action['result_event_id'] for action in actions if action['result_event_id'])
     events = get_events_by_ids(event_ids) if event_ids else []
     summary = store.summary(goal_id, evidence_events=events)
-    from workspace import INSPECTION_TOOLS, evidence_context
+    from workspace import INSPECTION_TOOLS, TEXT_TOOLS, evidence_context
     by_id = {event['id']: event for event in events}
     evidence = []
     for action in actions:
-        if action['tool_name'] in INSPECTION_TOOLS:
+        if action['tool_name'] in INSPECTION_TOOLS | TEXT_TOOLS:
             call = by_id.get(action['call_event_id'])
             result = by_id.get(action['result_event_id'])
             if call and result:

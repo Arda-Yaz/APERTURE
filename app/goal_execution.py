@@ -72,7 +72,7 @@ class ExecutionSession:
 
     def observe(self, tool_name, arguments, result, status, *, call_event=None, result_event=None):
         if status != 'ok':
-            self.stop({'permission_denied': 'permission denied', 'blocked': 'action blocked; reconciliation may be required'}
+            self.stop({'permission_denied': 'permission denied', 'blocked': 'action blocked; reconciliation may be required', 'conflict': 'workspace conflict; no effects', 'rejected': 'workspace write rejected; no effects'}
                       .get(status, 'tool error; mutation effects may require reconciliation'))
             return
         if tool_name in {'checkpoint_goal', 'recall_recent_activity', 'search_memory'}:

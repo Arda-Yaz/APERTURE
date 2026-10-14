@@ -14,6 +14,7 @@ def check_permission(tool_name: str, target: str = "") -> bool:
     "discover_workspace",
     "read_source",
     "search_workspace",
+    "snapshot_text",
     "search_memory",
     "recall_recent_activity",
     }
@@ -32,6 +33,7 @@ def check_permission(tool_name: str, target: str = "") -> bool:
     "discover_workspace",
     "read_source",
     "search_workspace",
+    "snapshot_text",
     "open_app",
     "run_terminal",
     "save_memory",

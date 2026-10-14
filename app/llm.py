@@ -50,6 +50,9 @@ from tools import (
     discover_workspace,
     read_source,
     search_workspace,
+    snapshot_text,
+    create_text,
+    update_text,
     list_directory,
     read_file,
     write_file,
@@ -95,6 +98,9 @@ BASE_TOOLS = [
     discover_workspace,
     read_source,
     search_workspace,
+    snapshot_text,
+    create_text,
+    update_text,
     list_directory,
     read_file,
     write_file,
@@ -241,6 +247,9 @@ TOOL_MAP = {
     "discover_workspace": discover_workspace,
     "read_source": read_source,
     "search_workspace": search_workspace,
+    "snapshot_text": snapshot_text,
+    "create_text": create_text,
+    "update_text": update_text,
     "list_directory":
         list_directory,
 
@@ -557,6 +566,36 @@ def finalize_answer(
 
 def _tool_result_status(result, tool_name=None) -> str:
     text = str(result)
+    if tool_name in {'snapshot_text', 'create_text', 'update_text'}:
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict) or data.get('tool') != tool_name:
+                return 'error'
+            status, effects = data.get('status'), data.get('effects')
+            if status in {'conflict', 'rejected'} and effects == 'none':
+                return status
+            metadata_valid = (data.get('complete') is True
+                              and re.fullmatch('[0-9a-f]{64}', str(data.get('fingerprint', '')))
+                              and data.get('fingerprint_algorithm') == 'sha256'
+                              and data.get('encoding') == 'utf-8'
+                              and type(data.get('byte_size')) is int
+                              and 0 <= data['byte_size'] <= 4096
+                              and isinstance(data.get('root'), str) and bool(data['root'])
+                              and isinstance(data.get('path'), str) and bool(data['path']))
+            if not metadata_valid:
+                return 'error'
+            if tool_name == 'snapshot_text' and status == 'ok' and effects == 'none':
+                if not isinstance(data.get('content'), str):
+                    return 'error'
+                raw = data['content'].encode('utf-8')
+                if len(raw) != data['byte_size'] or hashlib.sha256(raw).hexdigest() != data['fingerprint']:
+                    return 'error'
+                return 'ok'
+            if tool_name != 'snapshot_text' and status == 'verified' and effects == 'published' and data.get('verification') == {'exact_bytes': True, 'readback': True}:
+                return 'ok'
+        except (ValueError, TypeError):
+            pass
+        return 'error'
     if text.startswith(("TOOL_ERROR", "READ_ERROR", "WRITE_ERROR", "MEMORY_ERROR",
                         "OPEN_APP_ERROR", "TERMINAL_ERROR", "GOAL_BLOCKED",
                         "Path does not exist:", "Path is not a directory:")):
@@ -790,16 +829,23 @@ def chat(
             if tool_name == "save_self_memory" and not self_memory_tool_allowed:
                 result = "TOOL_ERROR: save_self_memory requires an explicit user request."
                 result_status = "blocked"
+            elif tool_name in {'create_text', 'update_text'} and goal_store is None:
+                result, result_status = 'TOOL_ERROR: Workspace writes require a persistent active goal.', 'rejected'
             elif blocked:
                 result, result_status = blocked, "blocked"
             elif tool_name not in turn_tools:
                 result = f"TOOL_ERROR: Unknown tool: {tool_name}"
                 result_status = "error"
             elif not isinstance(arguments, dict):
-                result, result_status = "TOOL_ERROR: Arguments must be an object.", "error"
+                result = "TOOL_ERROR: Arguments must be an object."
+                result_status = 'rejected' if tool_name in {'create_text', 'update_text'} else 'error'
+            elif tool_name in {'create_text', 'update_text'} and set(arguments) != (
+                    {'root', 'path', 'content', 'expected_fingerprint'} if tool_name == 'update_text'
+                    else {'root', 'path', 'content'}):
+                result, result_status = 'TOOL_ERROR: Workspace write arguments do not match the required fields.', 'rejected'
             else:
                 target = ((str(arguments.get('root', '')) + ' :: ' + str(arguments.get('path', '.')))
-                          if tool_name in {'discover_workspace', 'read_source', 'search_workspace'} else
+                          if tool_name in {'discover_workspace', 'read_source', 'search_workspace', 'snapshot_text', 'create_text', 'update_text'} else
                           (arguments.get("path") or arguments.get("app_name")
                           or arguments.get("cwd") or arguments.get("command")
                           or arguments.get("memory_id") or ""))
@@ -842,6 +888,10 @@ def chat(
                                           call_event=call_event, result_event=result_event)
                 if execution_session.stop_reason:
                     return execution_stop_answer()
+            if tool_name in {'create_text', 'update_text'} and result_status != 'ok':
+                reason = 'Workspace write stopped: ' + result_status + '; inspect the result before explicitly continuing.'
+                record_turn_stopped(turn_id, reason=reason)
+                return reason
             # Tool sonucunu sadece
             # çalışma geçmişine ekle.
             working_messages.append({

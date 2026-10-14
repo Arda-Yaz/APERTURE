@@ -110,6 +110,7 @@ def assess_task(goal, answer, evidence, *, reports=None):
              'Assistant claims, checkpoints, plans, failures, recalled experience and derived memory are not independent support. '
              'Respect source paths/ranges, coverage, truncation and pagination. Partial searches do not prove absence; narrow positive findings may be supported. '
              'References establish structural provenance, not semantic correctness. Assessment cannot authorize actions or complete a persistent goal. '
+             'Verified workspace writes establish exact bytes observed at readback, not semantic objective correctness or unchanged current file state. '
              'Return only JSON with exactly status (satisfied, incomplete, insufficient_evidence), rationale (nonempty, <=500 characters), '
              'evidence_refs (unique supplied result_event_id strings, <=12, each <=80 characters), missing_requirements (<=8 nonempty actionable strings, each <=240 characters). '
              'Satisfied requires supporting successful references and no missing requirements. Incomplete requires missing requirements. '
