@@ -1735,6 +1735,26 @@ def save_reflection_memory(
             "must be 'user' or 'aperture'."
         )
 
+    if subject == "user":
+        from experience import get_current_episode_id, get_events_by_ids
+
+        if (not isinstance(evidence_event_ids, (list, tuple))
+                or not evidence_event_ids
+                or any(not isinstance(event_id, str) or not event_id.strip()
+                       for event_id in evidence_event_ids)
+                or len(set(evidence_event_ids)) != len(evidence_event_ids)):
+            raise ValueError("User reflection requires observed user-message evidence.")
+
+        episode_id = get_current_episode_id(create_if_missing=False)
+        events = get_events_by_ids(evidence_event_ids) if episode_id is not None else []
+        if (len(events) != len(evidence_event_ids)
+                or {event["id"] for event in events} != set(evidence_event_ids)
+                or any(event.get("episode_id") != episode_id
+                       or event.get("event_class") != "observed"
+                       or event.get("event_type") != "user_message"
+                       or event.get("actor") != "arda" for event in events)):
+            raise ValueError("User reflection evidence must come from this episode's observed user messages.")
+
     if supersedes_memory_id:
 
         return _get_store().supersede(

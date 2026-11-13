@@ -1234,6 +1234,12 @@ def analyze_reflection_debug(
         )
     )
 
+    # Validation may reject or refine an extracted candidate, but it cannot
+    # introduce user memory when user-scoped extraction found no candidate.
+    if user_candidate is None and isinstance(final, dict) and final.get("user_memory") is not None:
+        final = dict(final)
+        final["user_memory"] = None
+
     return {
         "user_evidence":
             user_evidence,
@@ -1422,6 +1428,13 @@ def maybe_reflect(
         in evidence_events
     ]
 
+    user_evidence_event_ids = [
+        event["id"] for event in evidence_events
+        if event.get("event_class") == "observed"
+        and event.get("event_type") == "user_message"
+        and event.get("actor") == "arda"
+    ]
+
     # ========================================================
     # FULL DEBUG PIPELINE
     # ========================================================
@@ -1520,7 +1533,7 @@ def maybe_reflect(
                     category=category,
                     importance=importance,
                     evidence_event_ids=(
-                        evidence_event_ids
+                        user_evidence_event_ids
                     ),
                     supersedes_memory_id=(
                         user_memory.get(
@@ -1552,7 +1565,7 @@ def maybe_reflect(
                     ),
                     subject="user",
                     evidence_event_ids=(
-                        evidence_event_ids
+                        user_evidence_event_ids
                     ),
                 )
 
@@ -1566,7 +1579,7 @@ def maybe_reflect(
                         memory_record
                     ),
                     evidence_event_ids=(
-                        evidence_event_ids
+                        user_evidence_event_ids
                     ),
                 )
 
