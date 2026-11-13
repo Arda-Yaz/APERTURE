@@ -39,6 +39,7 @@ from experience import (
     record_tool_call,
     record_tool_result,
     get_events_by_ids,
+    get_turn_events,
     record_self_state_update,
     record_relationship_state_update,
     record_turn_stopped,
@@ -65,6 +66,7 @@ from task_controller import assess_task, EvidenceBundle
 
 from memory import (
     save_memory,
+    save_memory_from_user_event,
     save_self_memory,
     search_memory,
     forget_memory,
@@ -861,7 +863,23 @@ def chat(
                             persistent_goal_id, tool_name, arguments, call_event['id'],
                         )
                     try:
-                        result = turn_tools[tool_name](**arguments)
+                        if tool_name == 'save_memory':
+                            # The model supplies only memory content. Its source
+                            # is the observed user event recorded by this turn.
+                            source_events = [event for event in get_turn_events(turn_id)
+                                             if event.get('event_type') == 'user_message'
+                                             and event.get('event_class') == 'observed'
+                                             and event.get('actor') == 'arda']
+                            if len(source_events) != 1:
+                                result = 'MEMORY_ERROR: A current user-message source is required.'
+                            elif set(arguments) - {'content', 'category', 'importance'}:
+                                result = 'MEMORY_ERROR: Unexpected memory arguments.'
+                            else:
+                                result = save_memory_from_user_event(
+                                    **arguments, source_event_id=source_events[0]['id'],
+                                    turn_id=turn_id)
+                        else:
+                            result = turn_tools[tool_name](**arguments)
                         result_status = _tool_result_status(result, tool_name)
                     except Exception as exc:
                         result = f"TOOL_ERROR: {type(exc).__name__}: {exc}"

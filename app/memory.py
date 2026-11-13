@@ -1612,26 +1612,51 @@ def save_memory(
     importance is from 1 to 5.
     """
 
+    # This model-facing signature deliberately has no provenance argument.
+    # Runtime dispatch supplies the observed event through the internal path.
+    return "MEMORY_ERROR: A current user-message source is required."
+
+
+def save_memory_from_user_event(
+    content: str,
+    category: str = "fact",
+    importance: int = 3,
+    *,
+    source_event_id: str,
+    turn_id: str,
+) -> str:
+    """Persist a user memory only from an observed user event in this turn."""
+    from experience import get_current_episode_id, get_events_by_ids, get_turn_events
+
+    if not isinstance(source_event_id, str) or not source_event_id or not isinstance(turn_id, str) or not turn_id:
+        return "MEMORY_ERROR: A current user-message source is required."
+    episode_id = get_current_episode_id(create_if_missing=False)
+    events = get_events_by_ids([source_event_id])
+    if (episode_id is None or len(events) != 1
+            or events[0].get("id") != source_event_id
+            or events[0].get("episode_id") != episode_id
+            or events[0].get("turn_id") != turn_id
+            or events[0].get("event_class") != "observed"
+            or events[0].get("event_type") != "user_message"
+            or events[0].get("actor") != "arda"
+            or sum(event.get("id") == source_event_id for event in get_turn_events(turn_id)) != 1):
+        return "MEMORY_ERROR: Source is not an observed user message in the current turn."
+
     try:
         result = _get_store().remember(
-        content=content,
-        category=category,
-        importance=importance,
-        subject="user",
-    )
-
-        return (
-            f"MEMORY_SAVED: "
-            f"id={result['id']} "
-            f"category={result['category']} "
-            f"status={result['status']}"
+            content=content,
+            category=category,
+            importance=importance,
+            subject="user",
+            source="tool",
+            evidence_event_ids=[source_event_id],
         )
-
+        return (
+            f"MEMORY_SAVED: id={result['id']} "
+            f"category={result['category']} status={result['status']}"
+        )
     except Exception as error:
-        return (
-            f"MEMORY_ERROR: "
-            f"{type(error).__name__}: {error}"
-        )
+        return f"MEMORY_ERROR: {type(error).__name__}: {error}"
 
 
 def save_self_memory(
