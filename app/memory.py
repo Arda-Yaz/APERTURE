@@ -629,6 +629,113 @@ class MemoryStore:
             )
 
 
+            # A proposal is not an active memory. Keeping it in this store
+            # allows a later approval to change both records in one transaction.
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS pending_user_memories (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    importance INTEGER NOT NULL,
+                    evidence_event_ids_json TEXT NOT NULL,
+                    source_episode_id TEXT NOT NULL,
+                    supersedes_memory_id TEXT,
+                    target_content TEXT,
+                    target_updated_at TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(status IN ('pending', 'approved', 'rejected')),
+                    created_at TEXT NOT NULL,
+                    decided_at TEXT,
+                    resulting_memory_id TEXT
+                )
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_pending_user_memories_status
+                ON pending_user_memories(status, created_at)
+            """)
+
+    def create_pending_user_memory(
+        self, *, content: str, category: str, importance: int,
+        evidence_event_ids: list[str], supersedes_memory_id: str | None = None,
+    ) -> dict:
+        """Hold a user proposal with verified observed sources; do not form memory."""
+        from experience import get_current_episode_id, get_events_by_ids
+
+        if (not isinstance(evidence_event_ids, (list, tuple))
+                or not evidence_event_ids
+                or any(not isinstance(event_id, str) or not event_id
+                       or event_id != event_id.strip()
+                       for event_id in evidence_event_ids)
+                or len(set(evidence_event_ids)) != len(evidence_event_ids)):
+            raise ValueError("Pending user memory requires distinct user-event IDs.")
+
+        (content, category, importance, _, event_ids, _) = _prepare_memory_values(
+            content=content, category=category, importance=importance,
+            subject="user", evidence_event_ids=evidence_event_ids)
+        episode_id = get_current_episode_id(create_if_missing=False)
+        events = get_events_by_ids(event_ids) if episode_id is not None else []
+        if (len(events) != len(event_ids)
+                or {event["id"] for event in events} != set(event_ids)
+                or any(event.get("episode_id") != episode_id
+                       or event.get("event_class") != "observed"
+                       or event.get("event_type") != "user_message"
+                       or event.get("actor") != "arda" for event in events)):
+            raise ValueError("Pending user memory sources must be observed user messages in this episode.")
+
+        if supersedes_memory_id is not None:
+            if not isinstance(supersedes_memory_id, str) or not supersedes_memory_id.strip():
+                raise ValueError("Pending supersession target must be a memory ID.")
+            supersedes_memory_id = supersedes_memory_id.strip()
+
+        proposal_id = "pending_" + uuid.uuid4().hex
+        created_at = _now()
+        with self._connect() as connection:
+            target_content = target_updated_at = None
+            if supersedes_memory_id is not None:
+                target = connection.execute(
+                    "SELECT content, updated_at FROM memories "
+                    "WHERE id = ? AND active = 1 AND subject = 'user'",
+                    (supersedes_memory_id,),
+                ).fetchone()
+                if target is None:
+                    raise ValueError("Pending supersession target is not a current user memory.")
+                target_content = target["content"]
+                target_updated_at = target["updated_at"]
+            connection.execute("""
+                INSERT INTO pending_user_memories (
+                    id, content, category, importance, evidence_event_ids_json,
+                    source_episode_id, supersedes_memory_id, target_content,
+                    target_updated_at, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            """, (proposal_id, content, category, importance,
+                  json.dumps(event_ids, ensure_ascii=False), episode_id,
+                  supersedes_memory_id, target_content, target_updated_at,
+                  created_at))
+        return self.get_pending_user_memory(proposal_id)
+
+    def get_pending_user_memory(self, proposal_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM pending_user_memories WHERE id = ?",
+                (proposal_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        proposal = dict(row)
+        proposal["evidence_event_ids"] = _decode_evidence_event_ids(
+            proposal["evidence_event_ids_json"])
+        return proposal
+
+    def list_pending_user_memories(self, limit: int = 20) -> list[dict]:
+        limit = max(1, min(int(limit), 100))
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id FROM pending_user_memories WHERE status = 'pending' "
+                "ORDER BY created_at, id LIMIT ?", (limit,),
+            ).fetchall()
+        return [self.get_pending_user_memory(row["id"]) for row in rows]
+
+
     def remember(
         self,
         content: str,
