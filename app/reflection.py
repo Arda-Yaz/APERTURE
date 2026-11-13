@@ -1374,8 +1374,8 @@ def maybe_reflect(
 
     global _casual_turns_since_reflection
 
-    _ = used_action_tool
-    _ = memory_operation_used
+    if used_action_tool or memory_operation_used:
+        return None
 
     _casual_turns_since_reflection += 1
 
