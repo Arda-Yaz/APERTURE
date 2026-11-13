@@ -762,12 +762,35 @@ def _recent_dialogue(
         )
 
         relevant.append(
-            f"{label}: {content}"
+            f"{label}: {json.dumps(content, ensure_ascii=False)}"
         )
 
     return "\n\n".join(
         relevant[-limit:]
     )
+
+
+def _split_messages_by_role(messages) -> tuple[str, str]:
+    """Use message metadata for ownership; content is quoted, never reparsed."""
+    user_messages = []
+    self_messages = []
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(message.get("content", "")).strip()
+        if not content:
+            continue
+        label = "ARDA" if role == "user" else "APERTURE"
+        # JSON quoting prevents embedded labels, newlines, and code blocks from
+        # becoming another apparent top-level message in a model prompt.
+        entry = f"{label}: {json.dumps(content, ensure_ascii=False)}"
+        (user_messages if role == "user" else self_messages).append(entry)
+
+    return "\n\n".join(user_messages), "\n\n".join(self_messages[-1:])
 
 
 def _split_dialogue_by_speaker(
@@ -1158,6 +1181,7 @@ def analyze_reflection_debug(
     existing_memory: str,
     *,
     allow_raw_self_candidate: bool = False,
+    messages: list[dict] | None = None,
 ) -> dict:
     """
     Run the complete Memory Module pipeline
@@ -1167,10 +1191,10 @@ def analyze_reflection_debug(
     Code only separates ownership and validates output.
     """
 
+    # Production uses message metadata; legacy string parsing is for dry-run callers.
     user_evidence, self_evidence = (
-        _split_dialogue_by_speaker(
-            dialogue
-        )
+        _split_messages_by_role(messages) if messages is not None
+        else _split_dialogue_by_speaker(dialogue)
     )
 
     user_candidate = None
@@ -1364,6 +1388,12 @@ def maybe_reflect(
         )
     )
 
+    recent_messages = [
+        message for message in messages
+        if isinstance(message, dict) and message.get("role") in {"user", "assistant"}
+        and str(message.get("content", "")).strip()
+    ][-6:]
+
     if (
         len(dialogue)
         < 80
@@ -1402,6 +1432,7 @@ def maybe_reflect(
             existing_memory=(
                 existing_memory
             ),
+            messages=recent_messages,
         )
     )
 
