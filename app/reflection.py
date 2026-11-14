@@ -5,6 +5,7 @@ import json
 from ollama import chat as ollama_chat
 
 from memory import (
+    _get_store as get_memory_store,
     build_memory_validation_context,
     save_reflection_memory,
 )
@@ -459,44 +460,19 @@ is valid but its:
 is poor.
 
 
-RECOVERY
+USER CANDIDATE AUTHORITY
 
-You may recover a missing memory when an extraction pass
-returned null only because speaker-only evidence lacked context.
+If USER CANDIDATE is null, user_memory MUST be null.
+The full conversation may clarify a supplied user candidate,
+but it must not create a new one from a missing extraction.
 
-Recovery is allowed only when the complete conversation makes
-the durable information unambiguous.
-
-Do not invent a memory merely to fill an empty slot.
-
-
-MULTI-MESSAGE RECOVERY
-
-When USER extraction returned null, inspect Arda's messages
-individually before deciding that no user-memory exists.
-
-Questions about APERTURE, hypotheticals, and second-person
-statements should be ignored rather than allowing them to
-hide a separate durable statement about Arda.
-
-Example:
-
-ARDA asks two questions about APERTURE,
-then says:
-
-"I usually prefer working late at night."
-
-Even if USER extraction returned null,
-the validator may recover:
-
-{
-  "content": "Arda usually prefers working late at night.",
-  "category": "preference",
-  "importance": 3
-}
-
-Recovery must still be directly supported by Arda's words.
-Do not infer information merely to fill an empty slot.
+If Arda's observed words support a potentially durable user fact
+but you are uncertain whether it should become long-term memory,
+return the candidate with "needs_confirmation": true.
+This asks Arda to review it; it is not memory formation.
+Use false when the candidate is clearly justified.
+If the words do not support the candidate or ownership is unclear,
+return null. Do not queue an unsupported claim for confirmation.
 
 
 SEMANTIC FIDELITY
@@ -600,7 +576,8 @@ When a memory is justified, use:
   "content": "concise one-sentence summary",
   "category": "preference",
   "importance": 3,
-  "supersedes_memory_id": null
+  "supersedes_memory_id": null,
+  "needs_confirmation": false
 }
 
 Set supersedes_memory_id to a CURRENT_MEMORY_INDEX id only
@@ -1158,19 +1135,22 @@ EXISTING LONG-TERM MEMORY:
             allow_supersession=True,
         )
 
-    return {
-        "user_memory":
-            _sanitize_candidate(
-                data.get(
-                    "user_memory"
-                ),
-                USER_MEMORY_CATEGORIES,
-                allow_supersession=True,
-            ),
+    raw_user_memory = data.get("user_memory")
+    user_memory = None
+    if user_candidate is not None and isinstance(raw_user_memory, dict):
+        confirmation = raw_user_memory.get("needs_confirmation", False)
+        if type(confirmation) is bool:
+            user_memory = _sanitize_candidate(
+                raw_user_memory, USER_MEMORY_CATEGORIES,
+                allow_supersession=True)
+            if user_memory is not None:
+                user_memory["needs_confirmation"] = confirmation
 
-        "self_memory":
-            self_memory,
+    return {
+        "user_memory": user_memory,
+        "self_memory": self_memory,
     }
+
 
 # ============================================================
 # REFLECTION PIPELINE
@@ -1524,74 +1504,56 @@ def maybe_reflect(
             <= 500
             and category
             in USER_MEMORY_CATEGORIES
+            and type(user_memory.get("needs_confirmation", False)) is bool
         ):
 
-            memory_record = (
-                save_reflection_memory(
+            if user_memory.get("needs_confirmation") is True:
+                proposal = get_memory_store().create_pending_user_memory(
+                    content=content,
+                    category=category,
+                    importance=importance,
+                    evidence_event_ids=user_evidence_event_ids,
+                    supersedes_memory_id=user_memory.get("supersedes_memory_id"),
+                )
+                results.append(
+                    f"MEMORY_PENDING: id={proposal['id']} | {content} "
+                    f"(review with /memory show {proposal['id']}; "
+                    f"decide with /memory approve {proposal['id']} "
+                    f"or /memory reject {proposal['id']})"
+                )
+            else:
+                memory_record = save_reflection_memory(
                     subject="user",
                     content=content,
                     category=category,
                     importance=importance,
-                    evidence_event_ids=(
-                        user_evidence_event_ids
-                    ),
-                    supersedes_memory_id=(
-                        user_memory.get(
-                            "supersedes_memory_id"
-                        )
-                    ),
-                )
-            )
-
-            if (
-                turn_id is not None
-                and memory_record.get(
-                    "status"
-                )
-                == "superseded"
-            ):
-
-                record_memory_supersession(
-                    turn_id,
-                    old_memory_id=(
-                        memory_record[
-                            "superseded_memory_id"
-                        ]
-                    ),
-                    new_memory_id=(
-                        memory_record[
-                            "id"
-                        ]
-                    ),
-                    subject="user",
-                    evidence_event_ids=(
-                        user_evidence_event_ids
-                    ),
+                    evidence_event_ids=user_evidence_event_ids,
+                    supersedes_memory_id=user_memory.get("supersedes_memory_id"),
                 )
 
+                if turn_id is not None and memory_record.get("status") == "superseded":
+                    record_memory_supersession(
+                        turn_id,
+                        old_memory_id=memory_record["superseded_memory_id"],
+                        new_memory_id=memory_record["id"],
+                        subject="user",
+                        evidence_event_ids=user_evidence_event_ids,
+                    )
 
+                if turn_id is not None:
+                    record_memory_formation(
+                        turn_id,
+                        memory_record=memory_record,
+                        evidence_event_ids=user_evidence_event_ids,
+                    )
 
-            if turn_id is not None:
-
-                record_memory_formation(
-                    turn_id,
-                    memory_record=(
-                        memory_record
-                    ),
-                    evidence_event_ids=(
-                        user_evidence_event_ids
-                    ),
+                results.append(
+                    "MEMORY_SAVED: "
+                    f"id={memory_record['id']} "
+                    f"category={memory_record['category']} "
+                    f"status={memory_record['status']} "
+                    f"| {content}"
                 )
-
-            results.append(
-                "MEMORY_SAVED: "
-                f"id={memory_record['id']} "
-                f"category="
-                f"{memory_record['category']} "
-                f"status="
-                f"{memory_record['status']} "
-                f"| {content}"
-            )
 
     # ========================================================
     # SELF MEMORY
