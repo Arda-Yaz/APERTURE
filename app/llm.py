@@ -61,7 +61,7 @@ from tools import (
     run_terminal,
 )
 
-from permissions import check_permission
+from permissions import check_permission, tool_enabled
 from task_controller import assess_task, EvidenceBundle
 
 from memory import (
@@ -242,7 +242,7 @@ def get_tools_for_goal(
             save_self_memory
         )
 
-    return tools
+    return [tool for tool in tools if tool_enabled(tool.__name__)]
 
 
 TOOL_MAP = {
@@ -853,7 +853,7 @@ def chat(
                           or arguments.get("memory_id") or ""))
                 # Checkpoint only updates bound operational state; external tools
                 # retain the existing permission policy on every new dispatch.
-                allowed = tool_name == 'checkpoint_goal' or check_permission(tool_name, target)
+                allowed = tool_name == 'checkpoint_goal' or check_permission(tool_name, target, arguments=arguments)
                 if execution_session is not None and not execution_session.check_dispatch():
                     return execution_stop_answer()
                 if allowed:
