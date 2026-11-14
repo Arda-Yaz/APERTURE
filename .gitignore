@@ -15,3 +15,9 @@ data/aperture_memory.db-*
 
 data/aperture_experience.db
 data/aperture_experience.db-*
+
+data/aperture_goals.db
+data/aperture_goals.db-*
+
+# Local isolated test reports and scratch databases
+.reliability-tmp/
