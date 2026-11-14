@@ -646,6 +646,7 @@ class MemoryStore:
                         CHECK(status IN ('pending', 'approved', 'rejected')),
                     created_at TEXT NOT NULL,
                     decided_at TEXT,
+                    decision_event_id TEXT,
                     resulting_memory_id TEXT
                 )
             """)
@@ -653,6 +654,14 @@ class MemoryStore:
                 CREATE INDEX IF NOT EXISTS idx_pending_user_memories_status
                 ON pending_user_memories(status, created_at)
             """)
+            pending_columns = {
+                row["name"] for row in connection.execute(
+                    "PRAGMA table_info(pending_user_memories)").fetchall()
+            }
+            if "decision_event_id" not in pending_columns:
+                connection.execute(
+                    "ALTER TABLE pending_user_memories ADD COLUMN decision_event_id TEXT"
+                )
 
     def create_pending_user_memory(
         self, *, content: str, category: str, importance: int,
@@ -690,6 +699,7 @@ class MemoryStore:
         proposal_id = "pending_" + uuid.uuid4().hex
         created_at = _now()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             target_content = target_updated_at = None
             if supersedes_memory_id is not None:
                 target = connection.execute(
@@ -701,16 +711,28 @@ class MemoryStore:
                     raise ValueError("Pending supersession target is not a current user memory.")
                 target_content = target["content"]
                 target_updated_at = target["updated_at"]
-            connection.execute("""
-                INSERT INTO pending_user_memories (
-                    id, content, category, importance, evidence_event_ids_json,
-                    source_episode_id, supersedes_memory_id, target_content,
-                    target_updated_at, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-            """, (proposal_id, content, category, importance,
-                  json.dumps(event_ids, ensure_ascii=False), episode_id,
-                  supersedes_memory_id, target_content, target_updated_at,
-                  created_at))
+            encoded_ids = json.dumps(event_ids, ensure_ascii=False)
+            duplicate = connection.execute("""
+                SELECT id FROM pending_user_memories
+                WHERE status = 'pending' AND content = ? AND category = ?
+                  AND importance = ? AND evidence_event_ids_json = ?
+                  AND source_episode_id = ? AND supersedes_memory_id IS ?
+                  AND target_content IS ? AND target_updated_at IS ?
+                LIMIT 1
+            """, (content, category, importance, encoded_ids, episode_id,
+                  supersedes_memory_id, target_content, target_updated_at)).fetchone()
+            if duplicate is not None:
+                proposal_id = duplicate["id"]
+            else:
+                connection.execute("""
+                    INSERT INTO pending_user_memories (
+                        id, content, category, importance, evidence_event_ids_json,
+                        source_episode_id, supersedes_memory_id, target_content,
+                        target_updated_at, status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                """, (proposal_id, content, category, importance, encoded_ids,
+                      episode_id, supersedes_memory_id, target_content,
+                      target_updated_at, created_at))
         return self.get_pending_user_memory(proposal_id)
 
     def get_pending_user_memory(self, proposal_id: str) -> dict | None:
@@ -734,6 +756,165 @@ class MemoryStore:
                 "ORDER BY created_at, id LIMIT ?", (limit,),
             ).fetchall()
         return [self.get_pending_user_memory(row["id"]) for row in rows]
+
+    @staticmethod
+    def _validate_memory_decision_event(
+        decision_event_id: str | None, action: str, proposal_id: str,
+    ) -> None:
+        from experience import get_current_episode_id, get_events_by_ids
+
+        if not isinstance(decision_event_id, str) or not decision_event_id.strip():
+            raise ValueError("Memory decision requires an observed command event.")
+        events = get_events_by_ids([decision_event_id])
+        expected = ["/memory", action, proposal_id]
+        if (len(events) != 1
+                or events[0].get("episode_id") != get_current_episode_id(create_if_missing=False)
+                or events[0].get("event_class") != "observed"
+                or events[0].get("event_type") != "user_command"
+                or events[0].get("actor") != "arda"
+                or [part.casefold() if index < 2 else part
+                    for index, part in enumerate(str(events[0].get("content", "")).split())]
+                   != expected):
+            raise ValueError("Memory decision event does not match the user command.")
+
+    def reject_pending_user_memory(
+        self, proposal_id: str, *, decision_event_id: str | None = None,
+    ) -> dict:
+        """Record an explicit rejection without changing long-term memory."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            proposal = connection.execute(
+                "SELECT status FROM pending_user_memories WHERE id = ?",
+                (proposal_id,),
+            ).fetchone()
+            if proposal is None:
+                raise ValueError("Pending user memory was not found.")
+            if proposal["status"] == "approved":
+                raise ValueError("An approved user memory cannot be rejected.")
+            if proposal["status"] == "pending":
+                self._validate_memory_decision_event(
+                    decision_event_id, "reject", proposal_id)
+                connection.execute(
+                    "UPDATE pending_user_memories SET status = 'rejected', "
+                    "decided_at = ?, decision_event_id = ? "
+                    "WHERE id = ? AND status = 'pending'",
+                    (_now(), decision_event_id, proposal_id),
+                )
+        return self.get_pending_user_memory(proposal_id)
+
+    def approve_pending_user_memory(
+        self, proposal_id: str, *, decision_event_id: str | None = None,
+    ) -> dict:
+        """Apply an explicitly approved proposal and its status atomically.
+
+        The proposal supplies all memory values. Historical source events and a
+        supersession target are checked again at decision time, including after
+        the episode that produced the proposal has ended.
+        """
+        from experience import get_events_by_ids
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            proposal = connection.execute(
+                "SELECT * FROM pending_user_memories WHERE id = ?",
+                (proposal_id,),
+            ).fetchone()
+            if proposal is None:
+                raise ValueError("Pending user memory was not found.")
+            if proposal["status"] == "rejected":
+                raise ValueError("A rejected user memory cannot be approved.")
+            if proposal["status"] == "approved":
+                return self.get_pending_user_memory(proposal_id)
+            self._validate_memory_decision_event(
+                decision_event_id, "approve", proposal_id)
+
+            try:
+                stored_ids = json.loads(proposal["evidence_event_ids_json"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Pending user memory has invalid source IDs.") from exc
+            if (not isinstance(stored_ids, list) or not stored_ids
+                    or any(not isinstance(event_id, str) or not event_id
+                           or event_id != event_id.strip()
+                           for event_id in stored_ids)
+                    or len(set(stored_ids)) != len(stored_ids)):
+                raise ValueError("Pending user memory has invalid source IDs.")
+            events = get_events_by_ids(stored_ids)
+            if (len(events) != len(stored_ids)
+                    or {event["id"] for event in events} != set(stored_ids)
+                    or any(event.get("episode_id") != proposal["source_episode_id"]
+                           or event.get("event_class") != "observed"
+                           or event.get("event_type") != "user_message"
+                           or event.get("actor") != "arda" for event in events)):
+                raise ValueError("Pending user memory sources are no longer valid observed user messages.")
+
+            (content, category, importance, _, event_ids, normalized) = (
+                _prepare_memory_values(
+                    content=proposal["content"], category=proposal["category"],
+                    importance=proposal["importance"], subject="user",
+                    evidence_event_ids=stored_ids,
+                )
+            )
+            target_id = proposal["supersedes_memory_id"]
+            target = None
+            if target_id is not None:
+                target = connection.execute(
+                    "SELECT * FROM memories WHERE id = ? AND active = 1 "
+                    "AND subject = 'user'", (target_id,),
+                ).fetchone()
+                if (target is None or target["content"] != proposal["target_content"]
+                        or target["updated_at"] != proposal["target_updated_at"]):
+                    raise ValueError("Pending supersession target changed; review a new proposal.")
+
+            current = connection.execute(
+                "SELECT * FROM memories WHERE subject = 'user' "
+                "AND normalized_content = ? AND active = 1", (normalized,),
+            ).fetchone()
+            if target is None and current is not None:
+                raise ValueError(
+                    "An equivalent current user memory appeared; review a new proposal."
+                )
+            if target is not None and current is not None and current["id"] != target_id:
+                raise ValueError("An equivalent current user memory already exists.")
+
+            timestamp = _now()
+            if current is not None:
+                memory_id = current["id"]
+                merged_ids = _merge_evidence_event_ids(
+                    _decode_evidence_event_ids(current["evidence_event_ids_json"]),
+                    event_ids,
+                )
+                connection.execute(
+                    "UPDATE memories SET content = ?, category = ?, importance = ?, "
+                    "evidence_event_ids_json = ?, updated_at = ? WHERE id = ?",
+                    (content, category, max(importance, current["importance"]),
+                     _encode_evidence_event_ids(merged_ids), timestamp, memory_id),
+                )
+            else:
+                memory_id = uuid.uuid4().hex[:12]
+                if target is not None:
+                    connection.execute(
+                        "UPDATE memories SET active = 0, valid_until = ?, "
+                        "updated_at = ? WHERE id = ?", (timestamp, timestamp, target_id),
+                    )
+                connection.execute("""
+                    INSERT INTO memories (
+                        id, category, content, normalized_content, importance,
+                        source, subject, evidence_event_ids_json, active,
+                        valid_from, valid_until, supersedes_memory_id,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'user_approved_reflection', 'user',
+                              ?, 1, ?, NULL, ?, ?, ?)
+                """, (memory_id, category, content, normalized, importance,
+                      _encode_evidence_event_ids(event_ids), timestamp, target_id,
+                      timestamp, timestamp))
+
+            connection.execute(
+                "UPDATE pending_user_memories SET status = 'approved', "
+                "decided_at = ?, decision_event_id = ?, resulting_memory_id = ? "
+                "WHERE id = ? AND status = 'pending'",
+                (timestamp, decision_event_id, memory_id, proposal_id),
+            )
+        return self.get_pending_user_memory(proposal_id)
 
 
     def remember(
