@@ -8,7 +8,10 @@ from experience import (
     build_episode_continuity_context,
 )
 
+    get_events_by_ids,
+    record_event,
 from config import (
+from memory import _get_store as get_memory_store
     ENABLE_DYNAMIC_SELF,
     ENABLE_RELATIONSHIP,
     ENABLE_SELF_CONSOLIDATION,
@@ -19,6 +22,55 @@ from goals import get_store, goal_summary, handle_goal_command
 
 def main():
     previous_episode_id = (
+def _pending_memory_details(proposal: dict) -> str:
+    lines = [
+        f"Pending memory {proposal['id']} ({proposal['status']}):",
+        f"  Content: {proposal['content']}",
+        f"  Category: {proposal['category']}",
+        f"  Importance: {proposal['importance']}",
+    ]
+    events = {event['id']: event for event in
+              get_events_by_ids(proposal['evidence_event_ids'])}
+    for event_id in proposal['evidence_event_ids']:
+        event = events.get(event_id)
+        content = event['content'] if event is not None else '[source unavailable]'
+        lines.append(f"  User source {event_id}: {content}")
+    target_id = proposal['supersedes_memory_id']
+    if target_id:
+        lines.append(f"  Replaces {target_id}: {proposal['target_content']}")
+    return '\n'.join(lines)
+
+
+def handle_memory_command(command: str) -> str:
+    """Handle explicit local decisions without sending candidate text to a model."""
+    parts = command.strip().split()
+    usage = 'Use /memory list, /memory show <id>, /memory approve <id>, or /memory reject <id>.'
+    if len(parts) == 2 and parts[1] == 'list':
+        pending = get_memory_store().list_pending_user_memories()
+        if not pending:
+            return 'No pending user memories.'
+        return '\n\n'.join(_pending_memory_details(item) for item in pending)
+    if len(parts) == 3 and parts[1] in {'show', 'approve', 'reject'}:
+        store = get_memory_store()
+        proposal = store.get_pending_user_memory(parts[2])
+        if proposal is None:
+            raise ValueError('Unknown pending memory ID.')
+        if parts[1] == 'show':
+            return _pending_memory_details(proposal)
+        decision_event = record_event(
+            event_type='user_command', event_class='observed',
+            actor='arda', content=command.strip())
+        if parts[1] == 'approve':
+            decided = store.approve_pending_user_memory(
+                parts[2], decision_event_id=decision_event['id'])
+            return (f"Approved memory {parts[2]} as "
+                    f"{decided['resulting_memory_id']}.")
+        decided = store.reject_pending_user_memory(
+            parts[2], decision_event_id=decision_event['id'])
+        return f"Rejected memory {decided['id']}."
+    raise ValueError(usage)
+
+
         get_latest_episode_id()
     )
 
@@ -95,6 +147,11 @@ def main():
         metadata={
             "interface":
                 "cli",
+    pending_memories = get_memory_store().list_pending_user_memories()
+    if pending_memories:
+        print(f"{len(pending_memories)} pending user memory proposal(s). "
+              "Use /memory list to review them; startup approves none.\n")
+
 
             "model":
                 "qwen3:8b",
@@ -144,6 +201,14 @@ def main():
                 try:
                     status, execution_goal_id = handle_goal_command(user_input)
                 except ValueError as exc:
+            if user_input.strip().startswith('/memory'):
+                try:
+                    status = handle_memory_command(user_input)
+                except ValueError as exc:
+                    status = str(exc)
+                print(f"\nAPERTURE > {status}\n")
+                continue
+
                     print(f"\nAPERTURE > {exc}\n")
                     continue
                 print(f"\nAPERTURE > {status}\n")

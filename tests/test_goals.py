@@ -11,6 +11,7 @@ import isolation_support as safety
 safety.install_guards()
 
 import experience
+import memory
 import goals
 import llm
 from task_controller import Assessment
@@ -35,6 +36,7 @@ class GoalTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.object(goals, '_STORE', self.store))
         self.stack.enter_context(patch.object(experience, '_STORE', experience.ExperienceStore(self.root / 'experience.db')))
+        self.stack.enter_context(patch.object(memory, '_STORE', memory.MemoryStore(self.root / 'memory.db')))
         self.stack.enter_context(patch.object(experience, '_CURRENT_EPISODE_ID', None))
         self.stack.enter_context(patch.object(llm, 'inject_runtime_context', side_effect=lambda messages, **kw: list(messages)))
         self.stack.enter_context(patch.object(llm, 'maybe_reflect', return_value=None))

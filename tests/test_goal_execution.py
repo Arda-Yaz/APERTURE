@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / 'app'))
 import isolation_support as safety
 safety.install_guards()
 import experience
+import memory
 import goals
 import goal_execution as execution
 import llm
@@ -35,6 +36,7 @@ class ExecutionTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         for module, name, value in [(goals, '_STORE', self.store),
+                                    (memory, '_STORE', memory.MemoryStore(self.root / 'memory.db')),
                                     (experience, '_STORE', self.events),
                                     (experience, '_CURRENT_EPISODE_ID', None),
                                     (llm, 'ENABLE_DYNAMIC_SELF', False),
