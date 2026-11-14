@@ -6,12 +6,12 @@ from experience import (
     end_episode,
     get_latest_episode_id,
     build_episode_continuity_context,
-)
-
     get_events_by_ids,
     record_event,
-from config import (
+)
 from memory import _get_store as get_memory_store
+
+from config import (
     ENABLE_DYNAMIC_SELF,
     ENABLE_RELATIONSHIP,
     ENABLE_SELF_CONSOLIDATION,
@@ -20,8 +20,6 @@ from memory import _get_store as get_memory_store
 from goals import get_store, goal_summary, handle_goal_command
 
 
-def main():
-    previous_episode_id = (
 def _pending_memory_details(proposal: dict) -> str:
     lines = [
         f"Pending memory {proposal['id']} ({proposal['status']}):",
@@ -71,6 +69,8 @@ def handle_memory_command(command: str) -> str:
     raise ValueError(usage)
 
 
+def main():
+    previous_episode_id = (
         get_latest_episode_id()
     )
 
@@ -143,15 +143,15 @@ def handle_memory_command(command: str) -> str:
         print("Unfinished persistent work:\n" + goal_summary(unfinished['id']))
         print("Use /goal resume to continue; startup executes no goal tools.\n")
 
-    start_episode(
-        metadata={
-            "interface":
-                "cli",
     pending_memories = get_memory_store().list_pending_user_memories()
     if pending_memories:
         print(f"{len(pending_memories)} pending user memory proposal(s). "
               "Use /memory list to review them; startup approves none.\n")
 
+    start_episode(
+        metadata={
+            "interface":
+                "cli",
 
             "model":
                 "qwen3:8b",
@@ -197,10 +197,6 @@ def handle_memory_command(command: str) -> str:
 
                 break
 
-            if user_input.strip().split(maxsplit=1)[0:1] == ['/goal']:
-                try:
-                    status, execution_goal_id = handle_goal_command(user_input)
-                except ValueError as exc:
             if user_input.strip().startswith('/memory'):
                 try:
                     status = handle_memory_command(user_input)
@@ -209,6 +205,10 @@ def handle_memory_command(command: str) -> str:
                 print(f"\nAPERTURE > {status}\n")
                 continue
 
+            if user_input.strip().split(maxsplit=1)[0:1] == ['/goal']:
+                try:
+                    status, execution_goal_id = handle_goal_command(user_input)
+                except ValueError as exc:
                     print(f"\nAPERTURE > {exc}\n")
                     continue
                 print(f"\nAPERTURE > {status}\n")
