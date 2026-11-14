@@ -42,7 +42,7 @@ class WorkspaceWriteExecutionTests(unittest.TestCase):
         self.assertFalse((self.root / 'report.txt').exists())
         self.assertEqual(actor.call_count, 1)
         self.assertIn('permission denied', result)
-        self.permission.assert_called_with('create_text', str(self.root) + ' :: report.txt')
+        self.permission.assert_called_with('create_text', str(self.root) + ' :: report.txt', arguments=args)
 
     def test_conflict_stops_ordinary_resume_without_legacy_fallback(self):
         target = self.root / 'report.txt'
