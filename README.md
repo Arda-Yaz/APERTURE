@@ -1306,7 +1306,7 @@ APERTURE is currently **Windows-first**.
 - PowerShell
 - enough local RAM/VRAM to run the selected model
 
-The repository currently has an empty `requirements.txt`, so install the Ollama Python package manually for now.
+Install the pinned Python packages from `requirements.txt`. See the [installation and verification guide](docs/INSTALLATION.md) for the current steps.
 
 ---
 
@@ -1346,17 +1346,18 @@ python -m venv .venv
 
 ---
 
-## 5. Install the Python dependency
+## 5. Install Python dependencies
 
 ```powershell
-pip install ollama
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip check
 ```
 
 ---
 
 ## 6. Create the current terminal workspace
 
-`run_terminal` is currently locked to:
+The default `memory` tool profile does not expose `run_terminal`. In explicitly enabled `advanced` mode, its working directory is:
 
 ```text
 Documents/Aperture
@@ -1367,6 +1368,8 @@ Create it if necessary:
 ```powershell
 New-Item -ItemType Directory -Force "$HOME\Documents\Aperture"
 ```
+
+Setting a working directory does not restrict terminal access to that folder.
 
 ---
 
@@ -1722,9 +1725,9 @@ STT and TTS are planned but not implemented.
 
 Career automation, coding skills, LinkedIn/job search, and self-created skills are future modules.
 
-### `requirements.txt` is currently empty
+### Dependency manifest and CI
 
-Dependency management still needs cleanup.
+Direct Python dependencies are pinned in `requirements.txt`. A guarded regression suite runs through GitHub Actions; see the [installation and verification guide](docs/INSTALLATION.md).
 
 ### Tracked `__pycache__`
 
@@ -1802,7 +1805,7 @@ The repository does not currently declare an open-source license.
 - [ ] Streaming cleanup
 - [ ] Debug-output cleanup
 - [ ] Configuration system
-- [ ] Populate `requirements.txt`
+- [x] Populate `requirements.txt`
 - [ ] Remove tracked cache files
 - [ ] Automated regression suite
 - [ ] Packaging
