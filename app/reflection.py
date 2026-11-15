@@ -570,15 +570,21 @@ Return ONLY this structure:
   "self_memory": null
 }
 
-When a memory is justified, use:
+When user memory is justified, put the memory object inside
+"user_memory" and keep "self_memory" null:
 
 {
-  "content": "concise one-sentence summary",
-  "category": "preference",
-  "importance": 3,
-  "supersedes_memory_id": null,
-  "needs_confirmation": false
+  "user_memory": {
+    "content": "concise one-sentence summary",
+    "category": "preference",
+    "importance": 3,
+    "supersedes_memory_id": null,
+    "needs_confirmation": false
+  },
+  "self_memory": null
 }
+
+Never return a bare memory object without these two top-level keys.
 
 Set supersedes_memory_id to a CURRENT_MEMORY_INDEX id only
 when a genuine temporal replacement is clearly supported.
