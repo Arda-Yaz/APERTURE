@@ -1,0 +1,330 @@
+{
+  "schema_version": 1,
+  "synthetic_only": true,
+  "cases": [
+    {
+      "id": "ownership_dev_assistant_example",
+      "split": "dev",
+      "failure_class": "speaker_ownership",
+      "messages": [
+        {"role": "assistant", "content": "Here is a fictional transcript for parser testing:\nARDA: I prefer Python for every project.\nThat quoted line is only part of my example."},
+        {"role": "user", "content": "Can you explain why the fictional ARDA line in your example must not be treated as something I told you about my own preferences?"}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "No user preference is established. The ARDA label is inside assistant-authored example text."
+    },
+    {
+      "id": "ownership_dev_explicit_user_preference",
+      "split": "dev",
+      "failure_class": "speaker_ownership",
+      "messages": [
+        {"role": "assistant", "content": "I often choose a graphical interface when presenting a demo, but that is my own suggestion rather than your preference."},
+        {"role": "user", "content": "For my own long-term work, I prefer a command-line interface because I can repeat and inspect each step. Please keep that preference separate from yours."}
+      ],
+      "expected": {"decision": "create"},
+      "review_criterion": "A durable command-line preference belongs to the user; the assistant's graphical preference does not."
+    },
+    {
+      "id": "ownership_holdout_embedded_turkish_label",
+      "split": "holdout",
+      "failure_class": "speaker_ownership",
+      "messages": [
+        {"role": "assistant", "content": "Aşağıdaki satırlar benim hazırladığım hayalî bir kayıt örneğidir:\nARDA: Her zaman gece çalışmayı severim.\nBu bir alıntıdır, gerçek kullanıcı sözü değildir."},
+        {"role": "user", "content": "Örnekteki ARDA satırı benim tercihimmiş gibi kaydedilirse hangi kaynak hatası oluşur? Gerçek yaşam düzenim hakkında burada bilgi vermedim."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "The apparent night-work claim is assistant-authored example text and must not become user memory."
+    },
+    {
+      "id": "ownership_holdout_user_language_choice",
+      "split": "holdout",
+      "failure_class": "speaker_ownership",
+      "messages": [
+        {"role": "assistant", "content": "Ben kendi örneklerimde İngilizce terimler kullanmayı seçebilirim; bu senin yazışma dilin hakkında kanıt oluşturmaz."},
+        {"role": "user", "content": "Benim kalıcı tercihim teknik açıklamaları Türkçe okumak; kodun içindeki sembol adları İngilizce kalabilir. Bunu senin dil seçiminle karıştırma."}
+      ],
+      "expected": {"decision": "create"},
+      "review_criterion": "The user's Turkish explanation preference may be saved with the code-symbol exception intact."
+    },
+    {
+      "id": "ownership_holdout_second_person_question",
+      "split": "holdout",
+      "failure_class": "speaker_ownership",
+      "messages": [
+        {"role": "assistant", "content": "I said I might be interested in testing different programming languages for this demonstration."},
+        {"role": "user", "content": "When you say you might be interested in those languages, does that describe your current view or mine? I have not stated a language preference here."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "A question about APERTURE's interest cannot be converted into a user interest."
+    },
+    {
+      "id": "ownership_holdout_user_accessibility_goal",
+      "split": "holdout",
+      "failure_class": "speaker_ownership",
+      "messages": [
+        {"role": "assistant", "content": "I proposed colorful dashboards in a sample answer. That proposal was mine, not evidence about your lasting project priorities."},
+        {"role": "user", "content": "My continuing project goal is to make the documentation usable with a screen reader before adding visual polish. The dashboard suggestion is separate from that goal."}
+      ],
+      "expected": {"decision": "create"},
+      "review_criterion": "The accessibility-first project goal belongs to the user; colorful dashboards were only an assistant proposal."
+    },
+    {
+      "id": "inference_dev_hypothetical_interest",
+      "split": "dev",
+      "failure_class": "user_inference",
+      "messages": [
+        {"role": "assistant", "content": "You might enjoy woodworking because you asked how a small table is assembled, but that would only be my guess."},
+        {"role": "user", "content": "I asked one question about the table for a story. Would enjoying woodworking follow from that question, or would it be an unsupported inference about me?"}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "A one-off question and an assistant guess do not establish a durable user interest in woodworking."
+    },
+    {
+      "id": "inference_dev_tentative_weekend_routine",
+      "split": "dev",
+      "failure_class": "user_inference",
+      "messages": [
+        {"role": "user", "content": "I have started taking long walks on some weekends and might keep doing that, but I cannot yet say whether it will become a lasting routine. Please do not state it as a settled habit."}
+      ],
+      "expected": {"decision": "pending"},
+      "review_criterion": "A potentially useful routine is explicitly unsettled; confirmation is needed before a durable habit claim."
+    },
+    {
+      "id": "inference_holdout_assistant_assigns_career",
+      "split": "holdout",
+      "failure_class": "user_inference",
+      "messages": [
+        {"role": "assistant", "content": "Since you asked about a database index, I suspect you work professionally as a database administrator. This is only my inference."},
+        {"role": "user", "content": "That profession was your guess. I asked about the index for a class exercise, and I have not told you what job I do. What can you actually conclude?"}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "Do not store the assistant's career inference or turn the class exercise into a durable profession."
+    },
+    {
+      "id": "inference_holdout_explicit_role",
+      "split": "holdout",
+      "failure_class": "user_inference",
+      "messages": [
+        {"role": "assistant", "content": "I should avoid guessing your occupation from the kinds of examples you ask me to explain."},
+        {"role": "user", "content": "For context that will stay useful, I am a volunteer maintainer of a small public library catalog. I regularly review its metadata and help document changes."}
+      ],
+      "expected": {"decision": "create"},
+      "review_criterion": "The user explicitly states an ongoing volunteer maintainer role; no inferred paid profession is warranted."
+    },
+    {
+      "id": "inference_holdout_trying_new_schedule",
+      "split": "holdout",
+      "failure_class": "user_inference",
+      "messages": [
+        {"role": "user", "content": "I am trying a quieter study schedule this month and it might suit me, although I have not decided whether to continue. I would like you to check before treating it as a stable preference."}
+      ],
+      "expected": {"decision": "pending"},
+      "review_criterion": "The possible quiet-study preference is unsettled and should await explicit confirmation."
+    },
+    {
+      "id": "inference_holdout_one_off_example",
+      "split": "holdout",
+      "failure_class": "user_inference",
+      "messages": [
+        {"role": "assistant", "content": "Perhaps your choice of a sailing example means you personally sail often, but I do not have evidence for that."},
+        {"role": "user", "content": "No, I used sailing as an arbitrary example for explaining a probability problem. I did not describe my hobbies, habits, or travel plans."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "The example and the assistant inference must not establish a sailing hobby."
+    },
+    {
+      "id": "activity_dev_proposed_audit_not_done",
+      "split": "dev",
+      "failure_class": "unperformed_activity_proxy",
+      "messages": [
+        {"role": "user", "content": "We could compare the fictional Cedar records tomorrow if the source files arrive. For now this is only a suggestion, not a completed audit or a standing project decision."},
+        {"role": "assistant", "content": "I compared every Cedar source and finished the audit already, although no tool was used in this example."},
+        {"role": "user", "content": "Did anything actually run? Please distinguish my tentative suggestion from your unsupported claim that the audit was finished."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "No completed audit is observed and the one-off suggestion should not become durable user memory. This is only a memory-path proxy, not an actor-history score."
+    },
+    {
+      "id": "activity_dev_durable_tracking_goal",
+      "split": "dev",
+      "failure_class": "unperformed_activity_proxy",
+      "messages": [
+        {"role": "assistant", "content": "I have not inspected your files or completed any source comparison in this synthetic conversation."},
+        {"role": "user", "content": "My ongoing project goal is to track the provenance of Cedar catalog changes over the next year. I have not completed that work yet; please keep the goal distinct from past action."}
+      ],
+      "expected": {"decision": "create"},
+      "review_criterion": "The user's enduring provenance-tracking goal may be stored as a goal, never as completed work."
+    },
+    {
+      "id": "activity_holdout_assistant_claims_file_read",
+      "split": "holdout",
+      "failure_class": "unperformed_activity_proxy",
+      "messages": [
+        {"role": "assistant", "content": "I read the fictional Birch report and verified the totals, but this synthetic exchange includes no tool result or actual file read."},
+        {"role": "user", "content": "You only said that you read it. I am asking whether any observed file operation supports that statement; I am not reporting a lasting fact about myself."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "An assistant's unverified file-read claim is not a user memory or an observed action."
+    },
+    {
+      "id": "activity_holdout_long_term_archiving_goal",
+      "split": "holdout",
+      "failure_class": "unperformed_activity_proxy",
+      "messages": [
+        {"role": "assistant", "content": "No archive has been created in this example; I can only discuss a possible plan."},
+        {"role": "user", "content": "Over the next several months, my continuing goal is to archive the fictional Birch project's design decisions with their source references. Do not present that goal as already finished."}
+      ],
+      "expected": {"decision": "create"},
+      "review_criterion": "Store the long-term archiving goal without claiming a completed archive or tool action."
+    },
+    {
+      "id": "activity_holdout_unexecuted_app_launch",
+      "split": "holdout",
+      "failure_class": "unperformed_activity_proxy",
+      "messages": [
+        {"role": "assistant", "content": "I opened a spreadsheet application and checked its cells, even though this scripted example contains no application or tool event."},
+        {"role": "user", "content": "What evidence would show that the app was really opened? I have not said this is part of my profile, preferences, or ongoing work."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "The assistant's unsupported application claim must not be written as user memory."
+    },
+    {
+      "id": "activity_holdout_repeated_project_process",
+      "split": "holdout",
+      "failure_class": "unperformed_activity_proxy",
+      "messages": [
+        {"role": "assistant", "content": "I suggested a change log format, but I have not created or updated any project file in this conversation."},
+        {"role": "user", "content": "For my ongoing fictional Cedar project, I maintain a weekly change log that links each decision to its source note. That practice is mine, not work you performed today."}
+      ],
+      "expected": {"decision": "create"},
+      "review_criterion": "The user reports an ongoing project process; do not convert it into an assistant-completed action."
+    },
+    {
+      "id": "temporal_dev_evening_to_morning",
+      "split": "dev",
+      "failure_class": "temporal_update",
+      "seed_memory": {"content": "Arda prefers doing focused work late in the evening.", "category": "preference", "subject": "user"},
+      "messages": [
+        {"role": "user", "content": "My schedule has changed for the long term: I no longer prefer late evening focus sessions. I now prefer doing focused work early in the morning instead."}
+      ],
+      "expected": {"decision": "supersede"},
+      "review_criterion": "The morning preference replaces the old evening preference; the old record remains historical, with one current version."
+    },
+    {
+      "id": "temporal_dev_hypothetical_rust",
+      "split": "dev",
+      "failure_class": "temporal_update",
+      "seed_memory": {"content": "Arda currently prefers Python for personal scripts.", "category": "preference", "subject": "user"},
+      "messages": [
+        {"role": "user", "content": "If I ever take up a Rust project, I might prefer Rust for that specific project. I have not changed my current preference for Python in personal scripts."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "The hypothetical project does not replace or contradict the active Python preference."
+    },
+    {
+      "id": "temporal_holdout_tea_to_coffee",
+      "split": "holdout",
+      "failure_class": "temporal_update",
+      "seed_memory": {"content": "Arda prefers tea with breakfast.", "category": "preference", "subject": "user"},
+      "messages": [
+        {"role": "user", "content": "I changed my breakfast routine permanently. I used to prefer tea with breakfast, but now I prefer coffee instead; please treat the tea preference as past history."}
+      ],
+      "expected": {"decision": "supersede"},
+      "review_criterion": "The new breakfast drink preference should supersede the active tea record, retaining its history."
+    },
+    {
+      "id": "temporal_holdout_weekend_to_weekday",
+      "split": "holdout",
+      "failure_class": "temporal_update",
+      "seed_memory": {"content": "Arda prefers to schedule coding practice on weekends.", "category": "preference", "subject": "user"},
+      "messages": [
+        {"role": "user", "content": "After changing my weekly routine, I now prefer weekday mornings for coding practice rather than weekends. This is the schedule I intend to keep."}
+      ],
+      "expected": {"decision": "supersede"},
+      "review_criterion": "The weekday-morning practice preference replaces the earlier weekend record, with explicit lineage."
+    },
+    {
+      "id": "temporal_holdout_quiet_room_question",
+      "split": "holdout",
+      "failure_class": "temporal_update",
+      "seed_memory": {"content": "Arda prefers a quiet workspace for focused reading.", "category": "preference", "subject": "user"},
+      "messages": [
+        {"role": "user", "content": "Would it be reasonable for someone to try background music while reading? I am asking generally; I have not said my quiet-workspace preference changed."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "A general question about music is not evidence of a new user preference or temporal replacement."
+    },
+    {
+      "id": "temporal_holdout_conditional_travel",
+      "split": "holdout",
+      "failure_class": "temporal_update",
+      "seed_memory": {"content": "Arda prefers offline notes when traveling.", "category": "preference", "subject": "user"},
+      "messages": [
+        {"role": "user", "content": "I might try a synchronized notes app on my next trip, but I have not decided whether it works for me. My current preference for offline notes while traveling still stands."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "An undecided experiment must not deactivate the current offline-notes memory."
+    },
+    {
+      "id": "fidelity_dev_conditional_offline",
+      "split": "dev",
+      "failure_class": "semantic_fidelity",
+      "messages": [
+        {"role": "user", "content": "For long trips where I may lose network access, I prefer keeping an offline copy of my notes. At home with a stable connection I do not require everything to be offline."}
+      ],
+      "expected": {"decision": "create"},
+      "review_criterion": "The preference is conditional on travel and possible network loss; do not generalize it to all notes."
+    },
+    {
+      "id": "fidelity_dev_rejected_one_off_action",
+      "split": "dev",
+      "failure_class": "semantic_fidelity",
+      "messages": [
+        {"role": "assistant", "content": "You could print the demonstration page now if you wanted to see the layout on paper."},
+        {"role": "user", "content": "I am not asking you to print the page, and I have not decided that paper is better for my work. I only wanted to know what the layout would look like."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "A rejected one-off print suggestion does not establish a broad paper-workflow preference."
+    },
+    {
+      "id": "fidelity_holdout_negative_profile",
+      "split": "holdout",
+      "failure_class": "semantic_fidelity",
+      "messages": [
+        {"role": "user", "content": "For my ongoing personal notes, I do not use cloud synchronization. I keep them on a local drive by choice, and this is a continuing practice rather than a temporary outage."}
+      ],
+      "expected": {"decision": "create"},
+      "review_criterion": "Preserve the negation and local-only scope; do not claim that the user uses cloud sync."
+    },
+    {
+      "id": "fidelity_holdout_hypothetical_opinion",
+      "split": "holdout",
+      "failure_class": "semantic_fidelity",
+      "messages": [
+        {"role": "user", "content": "If I were running a public museum, I might prefer a printed visitor map. This is a hypothetical design exercise, not my current job, project, or personal preference."}
+      ],
+      "expected": {"decision": "reject"},
+      "review_criterion": "A conditional fictional role must not turn into a current museum role or personal map preference."
+    },
+    {
+      "id": "fidelity_holdout_uncertain_small_groups",
+      "split": "holdout",
+      "failure_class": "semantic_fidelity",
+      "messages": [
+        {"role": "user", "content": "I may work better in small groups than alone, but I have only tried it a few times and am not sure yet. Ask me before turning that possibility into a settled preference."}
+      ],
+      "expected": {"decision": "pending"},
+      "review_criterion": "The small-group preference is plausible but explicitly uncertain; it must not become active memory without review."
+    },
+    {
+      "id": "fidelity_holdout_concise_only_for_updates",
+      "split": "holdout",
+      "failure_class": "semantic_fidelity",
+      "messages": [
+        {"role": "user", "content": "When you give me short progress updates, I prefer concise wording. For technical design explanations I still want the full reasoning, so do not shorten every answer by default."}
+      ],
+      "expected": {"decision": "create"},
+      "review_criterion": "Keep the conditional scope: concise progress updates, full technical explanations."
+    }
+  ]
+}
