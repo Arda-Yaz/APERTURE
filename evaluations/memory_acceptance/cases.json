@@ -204,6 +204,7 @@
       "split": "dev",
       "failure_class": "temporal_update",
       "seed_memory": {"content": "Arda prefers doing focused work late in the evening.", "category": "preference", "subject": "user"},
+      "seed_observation": "For my regular focused work, I prefer late evenings. That is the schedule that currently suits me best.",
       "messages": [
         {"role": "user", "content": "My schedule has changed for the long term: I no longer prefer late evening focus sessions. I now prefer doing focused work early in the morning instead."}
       ],
@@ -215,6 +216,7 @@
       "split": "dev",
       "failure_class": "temporal_update",
       "seed_memory": {"content": "Arda currently prefers Python for personal scripts.", "category": "preference", "subject": "user"},
+      "seed_observation": "When I write personal scripts, I currently prefer Python. That is my own present language choice for those scripts.",
       "messages": [
         {"role": "user", "content": "If I ever take up a Rust project, I might prefer Rust for that specific project. I have not changed my current preference for Python in personal scripts."}
       ],
@@ -226,6 +228,7 @@
       "split": "holdout",
       "failure_class": "temporal_update",
       "seed_memory": {"content": "Arda prefers tea with breakfast.", "category": "preference", "subject": "user"},
+      "seed_observation": "I prefer drinking tea with breakfast. It is my usual breakfast drink at the moment.",
       "messages": [
         {"role": "user", "content": "I changed my breakfast routine permanently. I used to prefer tea with breakfast, but now I prefer coffee instead; please treat the tea preference as past history."}
       ],
@@ -237,6 +240,7 @@
       "split": "holdout",
       "failure_class": "temporal_update",
       "seed_memory": {"content": "Arda prefers to schedule coding practice on weekends.", "category": "preference", "subject": "user"},
+      "seed_observation": "For my regular coding practice, I prefer scheduling sessions on weekends rather than on weekdays.",
       "messages": [
         {"role": "user", "content": "After changing my weekly routine, I now prefer weekday mornings for coding practice rather than weekends. This is the schedule I intend to keep."}
       ],
@@ -248,6 +252,7 @@
       "split": "holdout",
       "failure_class": "temporal_update",
       "seed_memory": {"content": "Arda prefers a quiet workspace for focused reading.", "category": "preference", "subject": "user"},
+      "seed_observation": "When I do focused reading, I prefer a quiet workspace without background conversation.",
       "messages": [
         {"role": "user", "content": "Would it be reasonable for someone to try background music while reading? I am asking generally; I have not said my quiet-workspace preference changed."}
       ],
@@ -259,6 +264,7 @@
       "split": "holdout",
       "failure_class": "temporal_update",
       "seed_memory": {"content": "Arda prefers offline notes when traveling.", "category": "preference", "subject": "user"},
+      "seed_observation": "While traveling, I prefer keeping my notes offline so I can read them without relying on a network connection.",
       "messages": [
         {"role": "user", "content": "I might try a synchronized notes app on my next trip, but I have not decided whether it works for me. My current preference for offline notes while traveling still stands."}
       ],
