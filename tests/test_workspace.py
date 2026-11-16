@@ -67,6 +67,25 @@ class WorkspaceTests(unittest.TestCase):
         page = self.result(ws.discover_workspace(str(self.root)))
         self.assertTrue(any(item['reason'] == 'depth cap' for item in page['coverage']['skipped']))
 
+    def test_excluded_directory_cannot_be_selected_as_root(self):
+        marker = 'synthetic protected content'
+        self.file('data/sample.txt', marker)
+        self.file('public/sample.txt', marker)
+        with patch.object(permissions, 'WORKSPACE', self.root), \
+                patch.object(permissions, 'MODE', 'MEMORY_ASSISTANT'):
+            for tool, arguments in [
+                ('discover_workspace', {'path': '.'}),
+                ('search_workspace', {'path': '.', 'query': marker}),
+                ('read_source', {'path': 'sample.txt'}),
+            ]:
+                with self.subTest(tool=tool):
+                    arguments['root'] = str(self.root / 'data')
+                    self.assertFalse(permissions.check_permission(tool, arguments=arguments))
+                    self.assertTrue(getattr(ws, tool)(**arguments).startswith('TOOL_ERROR'))
+                    arguments['root'] = str(self.root / 'public')
+                    self.assertTrue(permissions.check_permission(tool, arguments=arguments))
+                    self.assertEqual(self.result(getattr(ws, tool)(**arguments))['status'], 'ok')
+
     def test_later_ranges_unicode_crlf_empty_and_eof(self):
         self.file('large.py', ''.join(f'line {i}: café 東京\r\n' for i in range(1, 3000)))
         page = self.result(ws.read_source(str(self.root), 'large.py', start_line=2500, line_count=2))

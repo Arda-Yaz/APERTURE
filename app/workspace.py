@@ -57,6 +57,8 @@ def _root(value):
     for component in [*reversed(p.parents), p]:
         if _linked(component):
             raise ValueError('root crosses a link or reparse point')
+        if _excluded(component.name, directory=True):
+            raise ValueError('root crosses an excluded workspace directory')
     p = p.resolve(strict=True)
     if not p.is_dir():
         raise ValueError('root is not a directory')

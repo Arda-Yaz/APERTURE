@@ -1,6 +1,7 @@
 """Application tool authorization; scoped tools enforce their own paths too."""
 import os
 from pathlib import Path
+from workspace import _root
 
 
 def resolve_mode(environ=None):
@@ -28,8 +29,8 @@ def _workspace_allowed(arguments):
     if not isinstance(arguments, dict) or not isinstance(arguments.get('root'), str):
         return False
     try:
-        root = Path(arguments['root'])
-        return root.is_absolute() and root.resolve().is_relative_to(WORKSPACE.resolve())
+        root = _root(arguments['root'])
+        return root.is_relative_to(WORKSPACE.resolve())
     except (OSError, ValueError):
         return False
 
