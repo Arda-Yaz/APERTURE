@@ -57,11 +57,16 @@ def _root(value):
     for component in [*reversed(p.parents), p]:
         if _linked(component):
             raise ValueError('root crosses a link or reparse point')
-        if _excluded(component.name, directory=True):
-            raise ValueError('root crosses an excluded workspace directory')
     p = p.resolve(strict=True)
     if not p.is_dir():
         raise ValueError('root is not a directory')
+    # Authorization supplies the workspace boundary. Components above it may
+    # legitimately be named like excluded directories.
+    from permissions import WORKSPACE
+    workspace = WORKSPACE.resolve()
+    if p.is_relative_to(workspace) and any(
+            _excluded(part, directory=True) for part in p.relative_to(workspace).parts):
+        raise ValueError('root crosses an excluded workspace directory')
     return p
 
 

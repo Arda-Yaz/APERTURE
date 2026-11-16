@@ -86,6 +86,16 @@ class WorkspaceTests(unittest.TestCase):
                     self.assertTrue(permissions.check_permission(tool, arguments=arguments))
                     self.assertEqual(self.result(getattr(ws, tool)(**arguments))['status'], 'ok')
 
+    def test_excluded_name_above_workspace_does_not_block_root(self):
+        workspace = self.root / 'data' / 'project'
+        workspace.mkdir(parents=True)
+        (workspace / 'sample.txt').write_text('visible', encoding='utf-8')
+        with patch.object(permissions, 'WORKSPACE', workspace), \
+                patch.object(permissions, 'MODE', 'MEMORY_ASSISTANT'):
+            arguments = {'root': str(workspace), 'path': 'sample.txt'}
+            self.assertTrue(permissions.check_permission('read_source', arguments=arguments))
+            self.assertEqual(self.result(ws.read_source(**arguments))['status'], 'ok')
+
     def test_later_ranges_unicode_crlf_empty_and_eof(self):
         self.file('large.py', ''.join(f'line {i}: café 東京\r\n' for i in range(1, 3000)))
         page = self.result(ws.read_source(str(self.root), 'large.py', start_line=2500, line_count=2))
