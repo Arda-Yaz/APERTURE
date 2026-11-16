@@ -1887,7 +1887,7 @@ def save_memory(
     importance: int = 3,
 ) -> str:
     """
-    Save durable information to APERTURE's long-term memory.
+    Propose durable information for user review before long-term storage.
 
     Use this for stable user preferences, profile information,
     long-term goals, project facts, and other information likely
@@ -1913,7 +1913,7 @@ def save_memory_from_user_event(
     source_event_id: str,
     turn_id: str,
 ) -> str:
-    """Persist a user memory only from an observed user event in this turn."""
+    """Queue a user memory only from an observed user event in this turn."""
     from experience import get_current_episode_id, get_events_by_ids, get_turn_events
 
     if not isinstance(source_event_id, str) or not source_event_id or not isinstance(turn_id, str) or not turn_id:
@@ -1931,17 +1931,17 @@ def save_memory_from_user_event(
         return "MEMORY_ERROR: Source is not an observed user message in the current turn."
 
     try:
-        result = _get_store().remember(
+        result = _get_store().create_pending_user_memory(
             content=content,
             category=category,
             importance=importance,
-            subject="user",
-            source="tool",
             evidence_event_ids=[source_event_id],
         )
         return (
-            f"MEMORY_SAVED: id={result['id']} "
-            f"category={result['category']} status={result['status']}"
+            f"MEMORY_PENDING: id={result['id']} "
+            f"(review with /memory show {result['id']}; "
+            f"decide with /memory approve {result['id']} "
+            f"or /memory reject {result['id']})"
         )
     except Exception as error:
         return f"MEMORY_ERROR: {type(error).__name__}: {error}"

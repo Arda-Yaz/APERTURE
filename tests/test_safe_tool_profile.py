@@ -129,12 +129,12 @@ class SafeToolProfileTests(unittest.TestCase):
         with patch.object(llm, 'ollama_chat', side_effect=[
             response(calls=[('save_memory', {'content':
                          'The user prefers hexagons.', 'category': 'preference'})]),
-            response('Saved the synthetic preference.')]):
+            response('The synthetic preference is pending review.')]):
             answer = llm.chat([{'role': 'user', 'content': message}])
-        self.assertIn('Saved', answer)
-        stored = self.memories.recent_records()
+        self.assertIn('pending review', answer)
+        stored = self.memories.list_pending_user_memories()
         self.assertEqual(len(stored), 1)
-        self.assertEqual(stored[0]['subject'], 'user')
+        self.assertEqual(self.memories.recent_records(), [])
         source = experience.get_events_by_ids(stored[0]['evidence_event_ids'])
         self.assertEqual(len(source), 1)
         self.assertEqual(source[0]['event_type'], 'user_message')

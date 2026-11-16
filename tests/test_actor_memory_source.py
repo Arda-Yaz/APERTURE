@@ -50,12 +50,12 @@ class ActorMemorySourceTests(unittest.TestCase):
         turn_id, event = self.user_event()
         result = memory.save_memory_from_user_event(
             "The user prefers tea.", "preference", source_event_id=event["id"], turn_id=turn_id)
-        self.assertTrue(result.startswith("MEMORY_SAVED:"), result)
-        stored = self.memories.recent_records()[0]
-        self.assertEqual(stored["subject"], "user")
+        self.assertTrue(result.startswith("MEMORY_PENDING:"), result)
+        stored = self.memories.list_pending_user_memories()[0]
         self.assertEqual(stored["evidence_event_ids"], [event["id"]])
+        self.assertEqual(self.memories.recent_records(), [])
         reopened = memory.MemoryStore(self.root / "memory.db")
-        self.assertEqual(reopened.get_by_id(stored["id"])["evidence_event_ids"], [event["id"]])
+        self.assertEqual(reopened.get_pending_user_memory(stored["id"])["evidence_event_ids"], [event["id"]])
 
     def test_nonuser_missing_and_other_turn_sources_are_rejected(self):
         turn_id, user = self.user_event()
@@ -78,7 +78,7 @@ class ActorMemorySourceTests(unittest.TestCase):
         result = memory.save_memory_from_user_event(
             "The user prefers Python.", source_event_id=user["id"], turn_id=turn_id)
         self.assertTrue(result.startswith("MEMORY_ERROR:"), result)
-        self.assertEqual(self.memories.recent_records(), [])
+        self.assertEqual(self.memories.list_pending_user_memories(), [])
 
     def test_actor_ignores_model_supplied_source_and_uses_current_user_event(self):
         messages = [{"role": "user", "content": "Remember my preference for tea."}]
@@ -86,7 +86,7 @@ class ActorMemorySourceTests(unittest.TestCase):
             response(calls=[("save_memory", {"content": "The user prefers tea."})]),
             response("Saved.")]), patch.object(llm, "maybe_reflect", return_value=None):
             self.assertEqual(llm.chat(messages), "Saved.")
-        stored = self.memories.recent_records()[0]
+        stored = self.memories.list_pending_user_memories()[0]
         source = experience.get_events_by_ids(stored["evidence_event_ids"])[0]
         self.assertEqual(source["event_type"], "user_message")
         self.assertEqual(source["content"], "Remember my preference for tea.")
@@ -97,7 +97,20 @@ class ActorMemorySourceTests(unittest.TestCase):
                                              "source_event_id": source["id"]})]),
             response("The write was rejected.")]), patch.object(llm, "maybe_reflect", return_value=None):
             self.assertEqual(llm.chat(messages), "The write was rejected.")
-        self.assertEqual(len(self.memories.recent_records()), 1)
+        self.assertEqual(len(self.memories.list_pending_user_memories()), 1)
+        self.assertEqual(self.memories.recent_records(), [])
+
+    def test_unsupported_actor_preference_stays_pending(self):
+        messages = [{"role": "user", "content":
+                     "Do you prefer Python? I have not chosen a language."}]
+        with patch.object(llm, "ollama_chat", side_effect=[
+            response(calls=[("save_memory", {"content": "The user prefers Python.",
+                                              "category": "preference"})]),
+            response("I cannot infer your preference yet.")]), \
+                patch.object(llm, "maybe_reflect", return_value=None):
+            llm.chat(messages)
+        self.assertEqual(self.memories.recent_records(), [])
+        self.assertEqual(len(self.memories.list_pending_user_memories()), 1)
 
 
 if __name__ == "__main__":
