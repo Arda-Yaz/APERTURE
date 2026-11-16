@@ -44,6 +44,12 @@ class ReflectionPendingApprovalTests(unittest.TestCase):
                     self.assertIs(result["user_memory"]["needs_confirmation"], expected)
 
         with patch.object(reflection, "_call_memory_module", return_value={
+            "user_memory": candidate, "self_memory": None}):
+            result = reflection.validate_memory_candidates(
+                "ARDA: I prefer quiet mornings.", candidate, None, "")
+        self.assertIsNone(result["user_memory"])
+
+        with patch.object(reflection, "_call_memory_module", return_value={
             "user_memory": dict(candidate, needs_confirmation=True), "self_memory": None}):
             result = reflection.validate_memory_candidates(
                 "ARDA: Hello.", None, None, "")
@@ -96,6 +102,21 @@ class ReflectionPendingApprovalTests(unittest.TestCase):
         self.assertEqual(result, "NO_MEMORY")
         self.assertEqual(self.memories.recent_records(), [])
         self.assertEqual(self.memories.list_pending_user_memories(), [])
+
+    def test_missing_confirmation_flag_cannot_write_memory(self):
+        message = "I prefer quiet mornings for long projects."
+        turn_id = experience.start_turn(message)
+        final = {"user_memory": {"content": "Arda prefers quiet mornings.",
+                                 "category": "preference", "importance": 3},
+                 "self_memory": None}
+        with patch.object(reflection, "REFLECTION_INTERVAL", 1), \
+                patch.object(reflection, "_casual_turns_since_reflection", 0), \
+                patch.object(reflection, "analyze_reflection_debug", return_value={"final": final}):
+            result = reflection.maybe_reflect(
+                [{"role": "user", "content": message}], used_action_tool=False,
+                memory_operation_used=False, turn_id=turn_id)
+        self.assertIsNone(result)
+        self.assertEqual(self.memories.recent_records(), [])
 
 
 if __name__ == "__main__":

@@ -1144,7 +1144,7 @@ EXISTING LONG-TERM MEMORY:
     raw_user_memory = data.get("user_memory")
     user_memory = None
     if user_candidate is not None and isinstance(raw_user_memory, dict):
-        confirmation = raw_user_memory.get("needs_confirmation", False)
+        confirmation = raw_user_memory.get("needs_confirmation")
         if type(confirmation) is bool:
             user_memory = _sanitize_candidate(
                 raw_user_memory, USER_MEMORY_CATEGORIES,
@@ -1510,7 +1510,8 @@ def maybe_reflect(
             <= 500
             and category
             in USER_MEMORY_CATEGORIES
-            and type(user_memory.get("needs_confirmation", False)) is bool
+            and "needs_confirmation" in user_memory
+            and type(user_memory["needs_confirmation"]) is bool
         ):
 
             if user_memory.get("needs_confirmation") is True:
