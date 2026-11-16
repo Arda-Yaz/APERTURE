@@ -113,6 +113,17 @@ class ActorMemorySourceTests(unittest.TestCase):
         self.assertEqual(self.memories.recent_records(), [])
         self.assertEqual(len(self.memories.list_pending_user_memories()), 1)
 
+    def test_pending_proposal_cannot_be_reported_as_saved(self):
+        messages = [{"role": "user", "content": "Remember that I prefer tea."}]
+        with patch.object(llm, "ollama_chat", side_effect=[
+            response(calls=[("save_memory", {"content": "The user prefers tea."})]),
+            response("Saved.")]), patch.object(llm, "maybe_reflect", return_value=None):
+            answer = llm.chat(messages)
+        self.assertIn("pending review", answer)
+        self.assertIn("/memory approve", answer)
+        self.assertNotIn("Saved.", answer)
+        self.assertEqual(self.memories.recent_records(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

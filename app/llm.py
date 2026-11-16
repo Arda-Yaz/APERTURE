@@ -418,6 +418,12 @@ def finalize_answer(
     used_action_tool: bool,
     memory_operation_used: bool,
 ):
+    pending = [str(event['content']) for event in get_turn_events(turn_id)
+               if event.get('event_type') == 'tool_result'
+               and event.get('metadata', {}).get('tool_name') == 'save_memory'
+               and str(event.get('content', '')).startswith('MEMORY_PENDING:')]
+    if pending:
+        answer = 'A user memory proposal is pending review. ' + pending[-1]
     messages.append({
         "role": "assistant",
         "content": answer,
