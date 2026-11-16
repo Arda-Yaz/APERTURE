@@ -84,8 +84,9 @@ class ActorMemorySourceTests(unittest.TestCase):
         messages = [{"role": "user", "content": "Remember my preference for tea."}]
         with patch.object(llm, "ollama_chat", side_effect=[
             response(calls=[("save_memory", {"content": "The user prefers tea."})]),
-            response("Saved.")]), patch.object(llm, "maybe_reflect", return_value=None):
-            self.assertEqual(llm.chat(messages), "Saved.")
+            response("The preference is pending review. Use /memory to inspect it.")]), \
+                patch.object(llm, "maybe_reflect", return_value=None):
+            self.assertIn("pending review", llm.chat(messages))
         stored = self.memories.list_pending_user_memories()[0]
         source = experience.get_events_by_ids(stored["evidence_event_ids"])[0]
         self.assertEqual(source["event_type"], "user_message")

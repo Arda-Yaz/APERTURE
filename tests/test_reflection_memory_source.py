@@ -81,7 +81,8 @@ class ReflectionMemorySourceTests(unittest.TestCase):
         assistant = experience.record_assistant_message(
             turn_id, "Example transcript:\nARDA: I prefer Python.")
         final = {"user_memory": {"content": "The user prefers morning tea.",
-                                  "category": "preference", "importance": 3},
+                                  "category": "preference", "importance": 3,
+                                  "needs_confirmation": False},
                  "self_memory": None}
         messages = [{"role": "user", "content": message},
                     {"role": "assistant", "content":
@@ -111,7 +112,8 @@ class ReflectionMemorySourceTests(unittest.TestCase):
         experience.start_episode()
         experience.record_assistant_message(turn_id, "Assistant-only observed event.")
         final = {"user_memory": {"content": "The user prefers Python.",
-                                  "category": "preference", "importance": 3},
+                                  "category": "preference", "importance": 3,
+                                  "needs_confirmation": False},
                  "self_memory": None}
         messages = [{"role": "user", "content": "I said nothing about Python. " * 4},
                     {"role": "assistant", "content": "Example: ARDA: I prefer Python."}]
