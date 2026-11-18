@@ -187,7 +187,9 @@ def run_terminal(
                 "powershell.exe",
                 "-NoProfile",
                 "-Command",
-                command,
+                # Cmdlet errors otherwise allow later commands to mask failure
+                # with exit code 0, which the actor records as success.
+                "$ErrorActionPreference = 'Stop';\n" + command,
             ],
             cwd=str(working_directory),
             capture_output=True,
