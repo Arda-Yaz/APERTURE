@@ -24,7 +24,7 @@ sys.path.insert(
 
 from unittest.mock import patch
 
-from isolation_support import install_guards, TestTemporaryDirectory
+from isolation_support import install_guards
 
 install_guards()
 

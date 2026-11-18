@@ -22,13 +22,12 @@ sys.path.insert(
 )
 
 
-from isolation_support import install_guards, TestTemporaryDirectory
+from isolation_support import install_guards
 
 install_guards()
 
 
 from self_state import (  # noqa: E402
-    STATE_KEYS,
     _sanitize_state,
     analyze_self_state_debug,
     empty_self_state,

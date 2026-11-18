@@ -451,54 +451,6 @@ _CURRENT_STATE = empty_self_state()
 # DIALOGUE
 # ============================================================
 
-def _recent_dialogue(
-    messages,
-    limit: int = 8,
-) -> str:
-    relevant = []
-
-    for message in messages:
-        if not isinstance(
-            message,
-            dict,
-        ):
-            continue
-
-        role = message.get(
-            "role"
-        )
-
-        if role not in {
-            "user",
-            "assistant",
-        }:
-            continue
-
-        content = str(
-            message.get(
-                "content",
-                "",
-            )
-        ).strip()
-
-        if not content:
-            continue
-
-        label = (
-            "ARDA"
-            if role == "user"
-            else "APERTURE"
-        )
-
-        relevant.append(
-            f"{label}: {content}"
-        )
-
-    return "\n\n".join(
-        relevant[-limit:]
-    )
-
-
 def _current_turn_dialogue(
     messages,
 ) -> str:

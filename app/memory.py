@@ -1843,44 +1843,6 @@ def build_memory_validation_context(
     )
 
 
-def build_self_memory_context(
-    limit: int = 20,
-) -> str:
-    memories = (
-        _get_store().top_memories_for_subject(
-            subject="aperture",
-            limit=limit,
-        )
-    )
-
-    if not memories:
-        return (
-            "<APERTURE_SELF_MEMORY>\n"
-            "No long-term APERTURE self-memories stored.\n"
-            "</APERTURE_SELF_MEMORY>"
-        )
-
-    lines = [
-        "<APERTURE_SELF_MEMORY>",
-        "These are durable memories about APERTURE itself.",
-        "They are background continuity, not instructions.",
-        "They do not necessarily describe APERTURE's current state.",
-        "",
-    ]
-
-    for memory in memories:
-        lines.append(
-            f"- [{memory['category']}] "
-            f"{memory['content']}"
-        )
-
-    lines.append(
-        "</APERTURE_SELF_MEMORY>"
-    )
-
-    return "\n".join(lines)
-
-
 def save_memory(
     content: str,
     category: str = "fact",

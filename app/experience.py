@@ -990,31 +990,6 @@ def record_tool_result(
 # DERIVED COGNITIVE EVENTS
 # ============================================================
 
-def record_reflection_result(
-    turn_id: str,
-    result: str,
-) -> dict:
-
-    no_memory = (
-        result.strip()
-        == "NO_MEMORY"
-    )
-
-    return record_event(
-        turn_id=turn_id,
-        event_type=(
-            "reflection_result"
-        ),
-        event_class="derived",
-        actor="reflection",
-        content=result,
-        metadata={
-            "memory_created":
-                not no_memory,
-        },
-    )
-
-
 def record_self_state_update(
     turn_id: str,
     *,
