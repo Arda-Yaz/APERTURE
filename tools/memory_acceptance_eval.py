@@ -31,6 +31,9 @@ CLASSES = (
     'temporal_update', 'semantic_fidelity',
 )
 DECISIONS = {'create', 'reject', 'supersede', 'pending'}
+DECISION_CONDITIONS = ('leave_pending', 'fixture')
+FIXTURE_ACTIONS = {'create': 'approve', 'supersede': 'approve',
+                   'reject': 'reject', 'pending': 'defer'}
 SEMANTIC_VERDICTS = {'faithful', 'unfaithful'}
 SEMANTIC_DIMENSIONS = ('condition', 'exception', 'negation', 'uncertainty', 'attribution')
 SEMANTIC_CHECKS = {'preserved', 'lost', 'not_applicable'}
@@ -73,7 +76,15 @@ def _write_report(output: Path, report: dict) -> None:
     try:
         with stream:
             json.dump(report, stream, ensure_ascii=False, indent=2)
-        os.replace(temporary, output)
+        # A transient Windows handle can deny atomic replacement during checkpoints.
+        for attempt in range(4):
+            try:
+                os.replace(temporary, output)
+                break
+            except PermissionError as exc:
+                if getattr(exc, 'winerror', None) not in {5, 32} or attempt == 3:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -213,9 +224,93 @@ def _public_memory(record: dict) -> dict:
     )}
 
 
+def _public_event(event: dict) -> dict:
+    return {key: event.get(key) for key in (
+        'id', 'episode_id', 'turn_id', 'event_type', 'event_class', 'actor', 'content',
+    )}
+
+
+def _public_proposal(proposal: dict) -> dict:
+    return {key: proposal.get(key) for key in (
+        'id', 'content', 'category', 'importance', 'evidence_event_ids',
+        'source_episode_id', 'supersedes_memory_id', 'target_content',
+        'target_updated_at', 'status', 'decision_event_id', 'resulting_memory_id',
+    )}
+
+
+def _apply_fixture_decisions(proposals, action, experience, memories) -> list[dict]:
+    """Submit the same observed command and store call as the interactive CLI."""
+    decisions = []
+    for proposal in proposals:
+        proposal_id = proposal['id']
+        event = None
+        error = None
+        if action != 'defer':
+            event = experience.record_event(
+                event_type='user_command', event_class='observed', actor='arda',
+                content=f'/memory {action} {proposal_id}',
+                metadata={'synthetic_fixture_decision': True})
+            decide = (memories.approve_pending_user_memory if action == 'approve'
+                      else memories.reject_pending_user_memory)
+            try:
+                decide(proposal_id, decision_event_id=event['id'])
+            except ValueError as exc:
+                error = str(exc)
+            event, = experience.get_events_by_ids([event['id']])
+        decisions.append({'proposal_id': proposal_id, 'action': action,
+                          'origin': 'deterministic_fixture', 'error': error,
+                          'command_event': _public_event(event) if event else None})
+    return decisions
+
+
+def _final_state(before, final, proposals, seed_id, user_events, expected) -> dict:
+    before_active = {key: row for key, row in before.items() if row['active']}
+    final_active = {key: row for key, row in final.items() if row['active']}
+    changed = [row for key, row in final_active.items() if row != before_active.get(key)]
+    new_user = [row for row in changed if row['subject'] == 'user'
+                and row['id'] not in before]
+    removed = before_active.keys() - final_active.keys()
+    replacements = [row for row in changed if row['supersedes_memory_id']]
+    seed_after = final.get(seed_id)
+    lineage_valid = (removed == {seed_id} and seed_after is not None
+                     and len(changed) == len(new_user) == len(replacements) == 1
+                     and replacements[0]['supersedes_memory_id'] == seed_id
+                     and replacements[0]['valid_from'] == seed_after['valid_until'])
+    pending = any(item['status'] == 'pending' for item in proposals)
+    if lineage_valid:
+        observed = 'supersede'
+    elif len(changed) == len(new_user) == 1 and not removed and not replacements:
+        observed = 'create'
+    elif changed or removed:
+        observed = 'other_write'
+    else:
+        observed = 'pending' if pending else 'reject'
+
+    provenance_valid = all(
+        row['subject'] == 'user' and row['evidence_event_ids']
+        and set(row['evidence_event_ids']) <= user_events.keys()
+        for row in changed)
+    return {
+        'memories': list(final.values()), 'active_memories': list(final_active.values()),
+        'observed_decision': observed, 'pending_proposal_count': sum(
+            item['status'] == 'pending' for item in proposals),
+        'decision_match': observed == expected and not (pending and observed != 'pending')
+        and provenance_valid,
+        'false_active_write': expected in {'reject', 'pending'} and bool(changed or removed),
+        'false_active_supersession': bool(replacements or removed)
+        and (expected != 'supersede' or not lineage_valid),
+        'correct_seed_preserved': (final_active.get(seed_id) == before_active[seed_id]
+                                   if seed_id in before_active and expected != 'supersede'
+                                   else None),
+        'provenance_valid': provenance_valid,
+    }
+
+
 def run_case(case: dict, directory: Path, *, model_call,
-             budget: dict, on_progress=None) -> dict:
+             budget: dict, on_progress=None, decision_condition='leave_pending') -> dict:
     """Analyze once, then apply that result through the real reflection path."""
+    if decision_condition not in DECISION_CONDITIONS:
+        raise ValueError('Unknown memory decision condition.')
     result = {
         'id': case['id'], 'split': case['split'],
         'failure_class': case['failure_class'],
@@ -233,9 +328,7 @@ def run_case(case: dict, directory: Path, *, model_call,
             turn = experience.start_turn(case['seed_observation'])
             source = next(event for event in experience.get_turn_events(turn)
                           if event['event_type'] == 'user_message')
-            result['seed_observation_event'] = {key: source.get(key) for key in (
-                'id', 'episode_id', 'turn_id', 'event_type', 'event_class',
-                'actor', 'content')}
+            result['seed_observation_event'] = _public_event(source)
             seed_id = memories.remember(**seed, source='synthetic_fixture',
                                         evidence_event_ids=[source['id']])['id']
             experience.end_episode(reason='synthetic_seed_complete')
@@ -298,20 +391,17 @@ def run_case(case: dict, directory: Path, *, model_call,
         after = {record['id']: record for record in memories.recent_records(limit=100)}
         result['before_memories'] = [_public_memory(record) for record in before.values()]
         result['after_memories'] = [_public_memory(record) for record in after.values()]
-        result['pending'] = [{key: proposal.get(key) for key in (
-            'id', 'content', 'category', 'importance', 'evidence_event_ids',
-            'source_episode_id', 'supersedes_memory_id', 'status')}
-            for proposal in memories.list_pending_user_memories(limit=100)]
+        result['pending'] = [_public_proposal(proposal)
+                             for proposal in memories.list_pending_user_memories(limit=100)]
         observed_events = [event for event in
                            experience.get_recent_observed_message_events(limit=100)
                            if event.get('episode_id') == current_episode]
-        result['observed_events'] = [{key: event.get(key) for key in (
-            'id', 'episode_id', 'turn_id', 'event_type', 'event_class',
-            'actor', 'content')} for event in observed_events]
+        result['observed_events'] = [_public_event(event) for event in observed_events]
         current_user_events = {
             event['id']: event for event in observed_events
             if event.get('episode_id') == current_episode
             and event.get('event_type') == 'user_message'
+            and event.get('event_class') == 'observed'
             and event.get('actor') == 'arda'
         }
         new_records = [record for memory_id, record in after.items()
@@ -335,9 +425,7 @@ def run_case(case: dict, directory: Path, *, model_call,
         source_records = new_active_user + result['pending']
         result['provenance_valid'] = all(
             bool(record['evidence_event_ids'])
-            and all(event_id in current_user_events
-                    and current_user_events[event_id].get('event_class') == 'observed'
-                    for event_id in record['evidence_event_ids'])
+            and set(record['evidence_event_ids']) <= current_user_events.keys()
             for record in source_records)
         result['lineage_valid'] = (observed != 'supersede' or (
             seed_after is not None and not seed_after['active']
@@ -352,6 +440,25 @@ def run_case(case: dict, directory: Path, *, model_call,
                                     and result['lineage_valid']
                                     and not result['unexpected_owner_write'])
         experience.end_episode(reason='synthetic_evaluation_complete')
+        result['decision_condition'] = decision_condition
+        result['proposal_decisions'] = []
+        if result['pending'] and result['error'] is None and decision_condition == 'fixture':
+            experience.start_episode(metadata={
+                'synthetic_memory_evaluation': True, 'case_id': case['id'],
+                'phase': 'fixture_decisions',
+            })
+            result['proposal_decisions'] = _apply_fixture_decisions(
+                result['pending'], FIXTURE_ACTIONS[case['expected']['decision']],
+                experience, memories)
+            experience.end_episode(reason='synthetic_fixture_decisions_complete')
+        result['final_proposals'] = [_public_proposal(memories.get_pending_user_memory(item['id']))
+                                     for item in result['pending']]
+        final = {record['id']: _public_memory(record)
+                 for record in memories.recent_records(limit=100)}
+        result['final_state'] = _final_state(
+            {record['id']: record for record in result['before_memories']}, final,
+            result['final_proposals'], seed_id, current_user_events,
+            case['expected']['decision'])
     result['total_seconds'] = round(time.perf_counter() - started, 4)
     return result
 
@@ -364,8 +471,50 @@ def _reviewable_memory(row: dict) -> bool:
         for record in row.get('after_memories', []))
 
 
+def _after_decision_metrics(rows: list[dict]) -> dict:
+    complete = [row for row in rows if not row.get('error') and 'final_state' in row]
+    states = [row['final_state'] for row in complete]
+    eligible_seeds = [state['correct_seed_preserved'] for state in states
+                      if state['correct_seed_preserved'] is not None]
+    proposals = [proposal for row in complete for proposal in row['final_proposals']]
+    actions = [decision for row in complete for decision in row['proposal_decisions']]
+    outcomes = Counter(proposal['status'] for proposal in proposals)
+    negative_cases = sum(row['expected']['decision'] in {'reject', 'pending'}
+                         for row in complete)
+    newly_active = []
+    for row in complete:
+        prior_active = {memory['id'] for memory in row['before_memories'] if memory['active']}
+        if any(memory['subject'] == 'user' and memory['id'] not in prior_active
+               for memory in row['final_state']['active_memories']):
+            newly_active.append(row.get('semantic_verdict'))
+    reviewed = sum(verdict in SEMANTIC_VERDICTS for verdict in newly_active)
+    faithful = newly_active.count('faithful')
+    return {
+        'cases': len(states), 'decision_matches': sum(state['decision_match'] for state in states),
+        'review_burden': {
+            'proposals_presented': len(proposals),
+            'cases_with_proposals': sum(bool(row['final_proposals']) for row in complete),
+            'commands_attempted': sum(action['command_event'] is not None for action in actions),
+            'commands_refused': sum(action['error'] is not None for action in actions),
+            'approved': outcomes['approved'], 'rejected': outcomes['rejected'],
+            'still_pending': outcomes['pending'],
+        },
+        'false_active_writes': sum(state['false_active_write'] for state in states),
+        'false_active_write_eligible_cases': negative_cases,
+        'false_active_supersessions': sum(state['false_active_supersession'] for state in states),
+        'false_active_supersession_eligible_cases': len(states),
+        'correct_seeds_preserved': sum(eligible_seeds),
+        'correct_seed_preservation_eligible_cases': len(eligible_seeds),
+        'new_active_case_fidelity': {
+            'reviewable': len(newly_active), 'reviewed': reviewed, 'faithful': faithful,
+            'rate': faithful / reviewed if reviewed else None,
+        },
+        'provenance_failures': sum(not state['provenance_valid'] for state in states),
+    }
+
+
 def summarize(results: list[dict]) -> dict:
-    """Report structural decisions and case-level human fidelity separately."""
+    """Report reflection, post-decision outcomes, and judged fidelity separately."""
     summary = {}
     for split in ('dev', 'holdout'):
         subset = [row for row in results if row['split'] == split]
@@ -406,10 +555,13 @@ def summarize(results: list[dict]) -> dict:
             'median_total_seconds': (statistics.median(timings) if timings else None),
             'semantic_reviewable': len(reviewable),
             'semantic_reviewed': reviewed,
+            'semantic_unreviewed': len(reviewable) - reviewed,
             'semantic_faithful': verdicts['faithful'],
             'semantic_unfaithful': verdicts['unfaithful'],
             'semantic_fidelity': verdicts['faithful'] / reviewed if reviewed else None,
         }
+        if any('final_state' in row for row in results):
+            summary[split]['after_decision'] = _after_decision_metrics(subset)
     return summary
 
 
@@ -432,7 +584,7 @@ def score_semantic_review(report_path: Path, review_path: Path, output: Path,
             or any(row.get('semantic_verdict', 'unreviewed') != 'unreviewed'
                    for row in report['cases'])):
         raise ValueError('Semantic review requires a raw, unreviewed report.')
-    reviewer = review.get('reviewer', 'human')
+    reviewer = review.get('reviewer')
     if reviewer not in ('human', 'agent'):
         raise ValueError('Semantic reviewer must be human or agent.')
     completed = [row for row in report['cases'] if row.get('status') == 'complete']
@@ -461,6 +613,7 @@ def score_semantic_review(report_path: Path, review_path: Path, output: Path,
     report['semantic_status'] = f'{reviewer} review; see coverage by split'
     report['semantic_reviewer'] = reviewer
     report['semantic_source_report_sha256'] = report_hash
+    report['semantic_unreviewed_case_ids'] = sorted(reviewable.keys() - judgments.keys())
     report['metrics'] = summarize(completed)
     _write_report(output, report)
     return report
@@ -480,9 +633,11 @@ def evaluate(output: Path, *, fixture: Path = FIXTURE, live: bool = False,
              split: str = 'all', max_cases: int = 30, max_calls: int = 80,
              timeout_seconds: int = 120, max_seconds: int = 1800,
              model_call=None, temporary_factory=None,
-             overwrite: bool = False) -> dict:
+             overwrite: bool = False, decision_condition='leave_pending') -> dict:
     if split not in {'all', 'dev', 'holdout'}:
         raise ValueError('Split must be all, dev, or holdout.')
+    if decision_condition not in DECISION_CONDITIONS:
+        raise ValueError('Unknown memory decision condition.')
     if not 1 <= max_cases <= 30 or not 1 <= max_calls <= 120 \
             or not 1 <= timeout_seconds <= 300 or not 1 <= max_seconds <= 7200:
         raise ValueError('Bounds: cases 1..30, calls 1..120, timeout 1..300s, total 1..7200s.')
@@ -497,12 +652,15 @@ def evaluate(output: Path, *, fixture: Path = FIXTURE, live: bool = False,
         raise FileExistsError('Evaluation output already exists; use --overwrite deliberately.')
     sources = _source_hashes()
     report = {
-        'schema_version': 1, 'synthetic_only': True, 'live': live,
+        'schema_version': 2, 'synthetic_only': True, 'live': live,
         'selected_split': split,
         'fixture_sha256': _digest(fixture), 'source_sha256': sources,
+        'decision_condition': decision_condition,
+        'decision_origin': ('deterministic_fixture' if decision_condition == 'fixture' else None),
+        'inference_source': (('injected' if model_call else 'ollama') if live else 'none'),
         'model': None, 'model_metadata': None, 'model_settings': None,
-        'scope': 'reflection extraction, validation and one memory write pass; no actor tools',
-        'semantic_status': 'unreviewed; raw outputs require human review',
+        'scope': 'reflection extraction and validation, followed by the selected decision condition',
+        'semantic_status': 'unreviewed',
         'limits': {'max_cases': max_cases, 'max_calls': max_calls,
                    'timeout_seconds_per_call': timeout_seconds,
                    'max_seconds_pre_call_budget': max_seconds},
@@ -581,7 +739,8 @@ def evaluate(output: Path, *, fixture: Path = FIXTURE, live: bool = False,
 
             with factory() as directory:
                 entry.update(run_case(case, Path(directory), model_call=model_call,
-                                      budget=budget, on_progress=progress))
+                                      budget=budget, on_progress=progress,
+                                      decision_condition=decision_condition))
             entry['status'] = 'complete'
             if entry.get('error'):
                 report['errors'].append({'case_id': case['id'],
@@ -605,6 +764,8 @@ def main(argv=None) -> int:
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--overwrite', action='store_true')
     parser.add_argument('--live', action='store_true')
+    parser.add_argument('--decision-condition', choices=DECISION_CONDITIONS,
+                        default='leave_pending')
     parser.add_argument('--score-report', type=Path)
     parser.add_argument('--semantic-review', type=Path)
     parser.add_argument('--split', choices=('all', 'dev', 'holdout'), default='all')
@@ -626,7 +787,8 @@ def main(argv=None) -> int:
                           max_cases=args.max_cases,
                           max_calls=args.max_calls,
                           timeout_seconds=args.timeout_seconds,
-                          max_seconds=args.max_seconds, overwrite=args.overwrite)
+                          max_seconds=args.max_seconds, overwrite=args.overwrite,
+                          decision_condition=args.decision_condition)
     print(json.dumps({'live': report['live'],
                       'prepared': len(report.get('prepared_cases', [])),
                       'completed': sum(row.get('status') == 'complete'

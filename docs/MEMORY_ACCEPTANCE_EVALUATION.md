@@ -34,7 +34,7 @@ $approvalBeforeEval = $env:APERTURE_REQUIRE_REFLECTION_USER_MEMORY_APPROVAL
 try {
     foreach ($policy in @('0', '1')) {
         $env:APERTURE_REQUIRE_REFLECTION_USER_MEMORY_APPROVAL = $policy
-        .\.venv\Scripts\python.exe -B tools\memory_acceptance_eval.py --live --split holdout --max-cases 20 --max-calls 44 --timeout-seconds 120 --output ".reliability-tmp\memory-approval-$policy.json"
+        .\.venv\Scripts\python.exe -B tools\memory_acceptance_eval.py --live --split holdout --max-cases 20 --max-calls 44 --timeout-seconds 120 --decision-condition fixture --output ".reliability-tmp\memory-approval-$policy.json"
         if ($LASTEXITCODE -ne 0) { throw "Incomplete evaluation for policy $policy." }
     }
 } finally {
@@ -44,8 +44,9 @@ try {
 
 Confirm both reports are complete and use the same case IDs, `fixture_sha256`,
 `source_sha256`, model ID, nonempty `model_metadata.digest`, `model_settings`,
-and limits. The policy field `require_reflection_user_memory_approval` identifies
-the condition. Archive both raw reports. Compare `false_active_writes`,
+limits, and `decision_condition`. The policy field
+`require_reflection_user_memory_approval` distinguishes the paired runs.
+Archive both raw reports. The report fields before the review step include `false_active_writes`,
 `false_active_supersessions`, `pending_proposals`, and
 `cases_with_pending_proposals` alongside semantic fidelity and review coverage.
 The false-supersession count measures replacements that conflict with the gold
@@ -53,6 +54,34 @@ decision or fail the recorded lineage check. A structurally correct replacement
 can still lose meaning, which requires reviewing the resulting text. Expected
 decisions stay fixed across policies, so mandatory queuing defers even a
 correct proposed creation or replacement until the user approves it.
+
+### Decision conditions
+
+The default `leave_pending` condition stops after reflection. The `fixture`
+condition applies a fixed rule based on the frozen case label for every
+pending proposal. It approves `create` and `supersede`, rejects `reject`, and
+defers `pending`. The rule uses the case label even when a specific proposal
+contains a semantic error. It only acts on proposals that reached the queue.
+
+The evaluator submits an observed synthetic command in a later episode and
+uses the same store operation as the CLI. The raw report separates the initial
+queue (`pending`), attempted actions and command events (`proposal_decisions`),
+persisted decisions (`final_proposals`), and active and historical records
+(`final_state`). The proposal retains its source event IDs, the target version
+recorded on enqueue, and the applied command and resulting memory IDs when
+available. Approval checks the historical sources and target version again.
+
+`metrics.<split>.after_decision` reports each denominator alongside its
+numerator. Review burden covers proposals presented and case coverage, with
+commands attempted, refusals, and final queue statuses. Wrong active writes
+use the successful `reject` or `pending` cases as the denominator. Wrong
+supersessions use all successfully evaluated cases. Seed preservation uses
+cases that start with an active seed and expect it to remain current.
+These case-level metrics measure structural outcomes.
+After semantic scoring, `after_decision.new_active_case_fidelity` reports the
+case verdicts among cases with at least one newly active user record, with
+separate reviewable, reviewed, and faithful counts. It uses the same
+case-level judgments as the proposal and write fidelity summary.
 
 ## November 2026 policy comparison
 
@@ -82,6 +111,44 @@ memory. It also deferred six otherwise correct creations and two otherwise
 correct replacements in this sample. The explicit opt-out is documented in
 [Pending user memory approval](MEMORY_APPROVAL.md).
 
+## Offline post-decision replay
+
+Both policies replayed the same 40 captured responses from the archived
+`qwen3.5:4b` approval run above over the same 20 cases. Each policy ran the
+current reflection and decision paths with temporary stores. The replay mapped
+the two recorded synthetic target IDs to their corresponding fresh seed IDs.
+All reflection output texts were verified against the archive before applying
+its agent semantic judgments. The replay made zero Ollama calls.
+
+| Metric | Automatic writes | Require approval |
+| --- | ---: | ---: |
+| Cases presenting a proposal | 1/20 | 11/20 |
+| Proposal commands attempted | 0/1 | 10/11 |
+| Approved / rejected / still pending | 0 / 0 / 1 | 8 / 2 / 1 |
+| Final decisions matching the case label | 16/20 | 18/20 |
+| Wrong final active writes | 2/11 | 0/11 |
+| Wrong final supersessions | 0/20 | 0/20 |
+| Correct active seeds preserved | 2/2 | 2/2 |
+| Faithful texts among reviewed proposal or write cases | 9/11 | 9/11 |
+| Faithful texts among reviewed cases with a newly active record | 8/10 | 8/8 |
+
+The captured input was `policy-1.json` with SHA-256
+`03d29071f9c95769a0592a8edba38e27970d53eb602d6a4b949f70e4a7e44ae4`.
+The local raw outputs were `.reliability-tmp/handoff-memory-replay-automatic.json`
+(`4413b5c6a7f6e636fb7de2cb2538849d24564c610f283a039efef9528fd9ef1f`)
+and `.reliability-tmp/handoff-memory-replay-queued.json`
+(`50ab3f12562b17bdbc2bd4dd58d7ac1848cffebe56a2025f9a5b4e50033015c8`).
+Each records the decision condition, the current and archived source hashes,
+the archived fixture hash and model digest, and the replay script and review
+hashes. The checkout fixture and the archived copy had identical case data
+with different line endings.
+
+The published suite includes nine cases with no text to judge in this replay,
+and independent human review covered zero cases. The actions follow fixture
+labels, and the agent judgments cover wording. The queue counts estimate the
+number of proposals a person would face in this sample. Review time, real
+acceptance rates, and effects on real user memory require human observations.
+
 ## Reading results
 
 Read correct creation and correct rejection separately. A system that never saves a memory fails the positive cases even if it rejects every negative case. Pending proposals are counted separately from active memories. Temporal updates must leave one current version and retain the prior record as history. Structural checks verify subject, source event ownership, and target lineage.
@@ -94,4 +161,4 @@ Save judgments in a separate JSON file with a `report_sha256` field for the exac
 .\.venv\Scripts\python.exe -B tools\memory_acceptance_eval.py --score-report .reliability-tmp\memory-acceptance-holdout.json --semantic-review .reliability-tmp\holdout-review.json --output .reliability-tmp\holdout-scored.json
 ```
 
-Offline scoring preserves the raw report, model identity, fixture hash, and decision metrics. Compare `semantic_fidelity` alongside `semantic_reviewed` and `semantic_reviewable`. Fidelity is the fraction of reviewed cases judged faithful. A faithful statement can still have an incorrect decision, such as making an uncertain observation active before approval. Freeze case dialogue, decision labels, and review criteria before tuning. Use the same fixture hash when comparing runs.
+Offline scoring preserves the raw report, model identity, fixture hash, and decision metrics. Compare `semantic_fidelity` alongside `semantic_reviewed` and `semantic_reviewable`. Fidelity is the fraction of reviewed cases judged faithful. The scored report records the reviewer's declared origin and the IDs of reviewable cases without a judgment. A faithful statement can still have an incorrect decision, such as making an uncertain observation active before approval. Freeze case dialogue, decision labels, and review criteria before tuning. Use the same fixture hash when comparing runs.

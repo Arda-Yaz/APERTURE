@@ -1,10 +1,11 @@
 """Synthetic memory acceptance runner: no live model or production stores."""
 
 import json
-from contextlib import redirect_stderr
+from contextlib import closing, redirect_stderr
 import io
 import os
 from pathlib import Path
+import sqlite3
 import sys
 import time
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 sys.path.insert(0, str(ROOT / 'app'))
 import memory_acceptance_eval as evaluator
+from memory import MemoryStore
 import reflection
 
 
@@ -176,6 +178,115 @@ class MemoryAcceptanceEvaluationTests(unittest.TestCase):
                 )))
         self.assertEqual(outcomes, [(1, 1, 0), (0, 0, 1)])
 
+    def test_fixture_decisions_audit_approve_reject_and_defer_after_reflection(self):
+        results = []
+        for expected, action, status in (
+                ('supersede', 'approve', 'approved'), ('reject', 'reject', 'rejected'),
+                ('pending', 'defer', 'pending')):
+            with self.subTest(expected=expected), TestTemporaryDirectory() as directory, \
+                    patch.object(reflection, 'REQUIRE_REFLECTION_USER_MEMORY_APPROVAL', True):
+                case = sample_case(expected, seed=True)
+                budget = {'calls': 0, 'max_calls': 2, 'started': time.perf_counter(),
+                          'max_seconds': 30}
+                result = evaluator.run_case(
+                    case, Path(directory), model_call=fake_model('supersede')[0],
+                    budget=budget, decision_condition='fixture')
+                self.assertIsNone(result['error'])
+                self.assertEqual(budget['calls'], 2)
+                proposal, = result['pending']
+                decision, = result['proposal_decisions']
+                final_proposal, = result['final_proposals']
+                active, = result['final_state']['active_memories']
+                seed, = result['before_memories']
+                self.assertEqual(result['observed_decision'], 'pending')
+                self.assertEqual(proposal['status'], 'pending')
+                self.assertEqual(proposal['supersedes_memory_id'], seed['id'])
+                self.assertEqual(result['after_memories'], [seed])
+                self.assertEqual(decision['action'], action)
+                self.assertEqual(decision['origin'], 'deterministic_fixture')
+                self.assertIsNone(decision['error'])
+                self.assertEqual(final_proposal['status'], status)
+                self.assertTrue(result['final_state']['decision_match'])
+                command = decision['command_event']
+                if action != 'defer':
+                    self.assertEqual(command['event_type'], 'user_command')
+                    self.assertEqual(command['content'], f"/memory {action} {proposal['id']}")
+                    self.assertNotEqual(command['episode_id'], proposal['source_episode_id'])
+                    self.assertEqual(final_proposal['decision_event_id'], command['id'])
+                else:
+                    self.assertIsNone(command)
+                    self.assertIsNone(final_proposal['decision_event_id'])
+                if action == 'approve':
+                    self.assertEqual(active['id'], final_proposal['resulting_memory_id'])
+                    self.assertEqual(active['supersedes_memory_id'], seed['id'])
+                    self.assertEqual(active['evidence_event_ids'], proposal['evidence_event_ids'])
+                    archived = next(row for row in result['final_state']['memories']
+                                    if row['id'] == seed['id'])
+                    self.assertFalse(archived['active'])
+                    self.assertEqual(archived['valid_until'], active['valid_from'])
+                else:
+                    self.assertEqual(active, seed)
+                    self.assertIsNone(final_proposal['resulting_memory_id'])
+                result['semantic_verdict'] = 'faithful' if action == 'approve' else 'unfaithful'
+                results.append(result)
+        summary = evaluator.summarize(results)['dev']
+        self.assertEqual(summary['semantic_fidelity'], 1 / 3)
+        metrics = summary['after_decision']
+        self.assertEqual(metrics['new_active_case_fidelity'], {
+            'reviewable': 1, 'reviewed': 1, 'faithful': 1, 'rate': 1.0,
+        })
+        self.assertEqual(metrics['decision_matches'], 3)
+        self.assertEqual(metrics['false_active_writes'], 0)
+        self.assertEqual(metrics['false_active_write_eligible_cases'], 2)
+        self.assertEqual(metrics['false_active_supersessions'], 0)
+        self.assertEqual(metrics['false_active_supersession_eligible_cases'], 3)
+        self.assertEqual(metrics['correct_seeds_preserved'], 2)
+        self.assertEqual(metrics['correct_seed_preservation_eligible_cases'], 2)
+        self.assertEqual(metrics['review_burden'], {
+            'proposals_presented': 3, 'cases_with_proposals': 3,
+            'commands_attempted': 2, 'commands_refused': 0,
+            'approved': 1, 'rejected': 1, 'still_pending': 1,
+        })
+
+    def test_fixture_approval_records_refusal_for_changed_source_or_target_version(self):
+        approve = MemoryStore.approve_pending_user_memory
+        for invalidate, message in (('source', 'sources are no longer valid'),
+                                    ('target', 'target changed')):
+            with self.subTest(invalidate=invalidate), TestTemporaryDirectory() as directory, \
+                    patch.object(reflection, 'REQUIRE_REFLECTION_USER_MEMORY_APPROVAL', True):
+                root = Path(directory)
+
+                def invalidate_then_approve(store, proposal_id, **kwargs):
+                    proposal = store.get_pending_user_memory(proposal_id)
+                    if invalidate == 'source':
+                        database, sql, row_id = (
+                            root / 'experience.db', "UPDATE events SET actor = 'aperture' WHERE id = ?",
+                            proposal['evidence_event_ids'][0])
+                    else:
+                        database, sql, row_id = (
+                            root / 'memory.db', "UPDATE memories SET updated_at = '2001-01-01' WHERE id = ?",
+                            proposal['supersedes_memory_id'])
+                    with closing(sqlite3.connect(database)) as connection, connection:
+                        connection.execute(sql, (row_id,))
+                    return approve(store, proposal_id, **kwargs)
+
+                budget = {'calls': 0, 'max_calls': 2, 'started': time.perf_counter(),
+                          'max_seconds': 30}
+                with patch.object(MemoryStore, 'approve_pending_user_memory', invalidate_then_approve):
+                    result = evaluator.run_case(
+                        sample_case('supersede', seed=True), root,
+                        model_call=fake_model('supersede')[0], budget=budget,
+                        decision_condition='fixture')
+                decision, = result['proposal_decisions']
+                proposal, = result['final_proposals']
+                self.assertIn(message, decision['error'])
+                self.assertEqual(proposal['status'], 'pending')
+                self.assertIsNone(proposal['decision_event_id'])
+                self.assertEqual(result['final_state']['active_memories'], result['before_memories'])
+                self.assertFalse(result['final_state']['decision_match'])
+                metrics = evaluator.summarize([result])['dev']['after_decision']
+                self.assertEqual(metrics['review_burden']['commands_refused'], 1)
+
     def test_offline_fidelity_score_preserves_raw_run_and_decision_score(self):
         rows = [
             dict(sample_case('create'), status='complete', decision_match=True,
@@ -212,6 +323,7 @@ class MemoryAcceptanceEvaluationTests(unittest.TestCase):
             self.assertEqual(scored['cases'][0]['after_memories'], rows[0]['after_memories'])
             self.assertEqual(scored['cases'][0]['semantic_checks'], judgment['checks'])
             self.assertEqual(scored['semantic_reviewer'], 'agent')
+            self.assertEqual(scored['semantic_unreviewed_case_ids'], [])
             self.assertEqual(evaluator._digest(source), review['report_sha256'])
             review['report_sha256'] = 'wrong run'
             review_file.write_text(json.dumps(review), encoding='utf-8')
@@ -349,6 +461,30 @@ class MemoryAcceptanceEvaluationTests(unittest.TestCase):
             self.assertEqual(len(report['prepared_cases']), 10)
             self.assertEqual(json.loads(output.read_text(encoding='utf-8')),
                              report)
+
+    def test_report_retries_transient_windows_replace_without_losing_checkpoint(self):
+        with TestTemporaryDirectory() as directory:
+            output = Path(directory) / 'checkpoint.json'
+            output.write_text('{"previous": true}', encoding='utf-8')
+            original_replace = os.replace
+            transient = PermissionError('synthetic sharing violation')
+            transient.winerror = 5
+            attempts = []
+
+            def fail_once(source, destination):
+                attempts.append(source)
+                self.assertEqual(json.loads(output.read_text(encoding='utf-8')),
+                                 {'previous': True})
+                if len(attempts) == 1:
+                    raise transient
+                original_replace(source, destination)
+
+            with patch.object(os, 'replace', fail_once), patch.object(time, 'sleep') as sleep:
+                evaluator._write_report(output, {'current': True})
+            sleep.assert_called_once_with(0.05)
+            self.assertEqual(len(attempts), 2)
+            self.assertEqual(json.loads(output.read_text(encoding='utf-8')), {'current': True})
+            self.assertEqual(list(Path(directory).iterdir()), [output])
 
     def test_cli_rejects_output_outside_scratch(self):
         with TestTemporaryDirectory(prefix='memory-eval-output-',
