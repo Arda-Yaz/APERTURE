@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "split_rule": "F01-F10 frozen before the first run; original synthetic corpus",
+  "cases": [
+    {"id": "F01", "split": "fresh", "kind": "paraphrase", "query": "Which foreign tongue is she learning during the week?", "gold_ids": ["m00000000006"], "recent_dialogue": ""},
+    {"id": "F02", "split": "fresh", "kind": "cross_language", "query": "Cobalt saha ekibi nerede buluşuyor?", "gold_ids": ["m00000000011"], "recent_dialogue": ""},
+    {"id": "F03", "split": "fresh", "kind": "follow_up", "query": "What about the time of day?", "gold_ids": ["m00000000007"], "recent_dialogue": "user: I mean the Juniper workshop on Saturday."},
+    {"id": "F04", "split": "fresh", "kind": "ownership", "query": "Is Quartzpad the user's notes editor, or does Leonie use another editor?", "gold_ids": ["m00000000018"], "recent_dialogue": "", "expected_subject": "user"},
+    {"id": "F05", "split": "fresh", "kind": "correction", "query": "Which day is the Cobalt review currently scheduled for?", "gold_ids": ["m00000000023"], "recent_dialogue": ""},
+    {"id": "F06", "split": "fresh", "kind": "old_zero_overlap", "query": "When is her best time to get demanding work done?", "gold_ids": ["m00000000001"], "recent_dialogue": ""},
+    {"id": "F07", "split": "fresh", "kind": "no_answer", "query": "How old is Leonie's cat Juniper?", "gold_ids": [], "recent_dialogue": ""},
+    {"id": "F08", "split": "fresh", "kind": "no_answer", "query": "How long does the Tuesday Cobalt backup retain files?", "gold_ids": [], "recent_dialogue": ""},
+    {"id": "F09", "split": "fresh", "kind": "no_answer", "query": "Who manufactured the ceramic samples on the synthetic inventory shelves?", "gold_ids": [], "recent_dialogue": ""},
+    {"id": "F10", "split": "fresh", "kind": "topic_change", "query": "What was the forecast?", "gold_ids": [], "recent_dialogue": "user: Was the Cobalt review moved to Friday?"}
+  ]
+}

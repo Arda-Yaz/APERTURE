@@ -2,7 +2,7 @@
 
 > **A local, tool-using AI agent with persistent memory, self-reflection, and an identity designed to emerge through experience rather than a hard-coded persona.**
 
-APERTURE is an experimental local personal AI agent built around **Qwen3:8b** and **Ollama**.
+APERTURE is an experimental local personal AI agent that runs on **Ollama** with **qwen3.5:4b** as the default model.
 
 The project is not intended to be only a chatbot, a coding assistant, or a collection of automation scripts. The long-term goal is to build a persistent local AI system that can act on the computer, remember both its user and itself, maintain continuity across sessions, develop preferences and attitudes through interaction, and eventually gain workspace awareness, coding capabilities, voice, autonomous reflection, and reusable skills.
 
@@ -66,10 +66,10 @@ The goal is for APERTURE to become more than a stateless prompt wrapped around Q
 
 ## 1. The model is not the agent
 
-Qwen3:8b is the local language model used by APERTURE, but APERTURE is the complete system around it.
+APERTURE combines a local language model with persistent state and an agent loop.
 
 ```text
-Qwen3:8b
+qwen3.5:4b (default)
    +
 Agent loop
    +
@@ -173,7 +173,7 @@ As of the current development checkpoint, APERTURE includes:
 
 ### Local inference
 
-- Qwen3:8b
+- qwen3.5:4b (default)
 - Ollama Python SDK
 - fully local model execution
 
@@ -254,7 +254,7 @@ flowchart TD
     L --> MEM[Long-Term Memory]
     L --> RM[Relevant Memory]
 
-    P --> Q[Qwen3:8b via Ollama]
+    P --> Q[qwen3.5:4b via Ollama]
     MEM --> Q
     RM --> Q
 
@@ -337,7 +337,7 @@ User request
     ↓
 Inject persona + memory context
     ↓
-Qwen3:8b
+Local model through Ollama
     ↓
 Tool needed?
  ┌───────┴────────┐
@@ -523,7 +523,18 @@ This allows equivalent statements to exist independently for different subjects.
 
 ## Relevant-memory retrieval
 
-APERTURE performs lightweight lexical retrieval against stored memories.
+For actor context, APERTURE ranks active memories by weighted token overlap with
+the current request and recent dialogue. It assembles a bounded pool from
+current-query matches, dialogue matches, and recent records interleaved by
+subject. The retrieval model selects relevant IDs from this pool and can return
+an empty list. The store validates the selection and reloads the original
+active records, preserving their ownership and provenance.
+
+The `search_memory` tool directly ranks active memories by token overlap with
+its query. When the actor's selector fails or returns invalid IDs, the actor
+uses the same query-only lexical ranking with its own result limit. Weak
+token matches can enter either lexical result. See the [synthetic retrieval
+evaluation](docs/RETRIEVAL_EVALUATION.md) for the measurements and commands.
 
 Relevant memories are returned with ownership tags:
 
@@ -1302,7 +1313,7 @@ APERTURE is currently **Windows-first**.
 - Windows 10/11
 - Python **3.10+**
 - Ollama
-- Qwen3:8b
+- qwen3.5:4b (default)
 - PowerShell
 - enough local RAM/VRAM to run the selected model
 
@@ -1686,9 +1697,10 @@ The controller validates structure and evidence eligibility, but its semantic
 judgment remains fallible. Mocked regression tests do not establish live-model
 assessment accuracy.
 
-### Lexical memory retrieval
+### Memory retrieval limits
 
-Relevant memory currently uses lightweight token overlap rather than embeddings or hybrid retrieval.
+The selector can miss relevant records outside its candidate pool. Query-only
+lexical results can include records that share words with an unanswered request.
 
 ### Semantic cognitive passes add local inference cost
 
