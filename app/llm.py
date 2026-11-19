@@ -70,7 +70,7 @@ from tools import (
 )
 
 from permissions import check_permission, tool_enabled
-from task_controller import assess_task, EvidenceBundle
+from task_controller import assess_task, EvidenceBundle, verify_conversation_reply
 
 from memory import (
     save_memory,
@@ -709,9 +709,8 @@ def _format_action_observation(observation):
     return f"{tool}{target}: {status} (result {observation['result_event_id']})"
 
 
-def _decode_no_action_reply(answer, observations, *, require_cli_response):
-    # Category choice belongs to the actor. The CLI validates the response form
-    # and accepts only references to observations supplied with this generation.
+def _decode_no_action_reply(answer, observations, *, goal, require_cli_response):
+    # The CLI accepts only references to observations supplied with this generation.
     report = answer.strip()
     if report.startswith(ACTION_STATUS_PREFIX):
         reference = report.removeprefix(ACTION_STATUS_PREFIX).strip()
@@ -723,7 +722,8 @@ def _decode_no_action_reply(answer, observations, *, require_cli_response):
     if require_cli_response and report.startswith(CONVERSATION_PREFIX):
         conversation = report.removeprefix(CONVERSATION_PREFIX).strip()
         if conversation and ACTION_STATUS_PREFIX not in conversation and CONVERSATION_PREFIX not in conversation:
-            return conversation
+            if verify_conversation_reply(goal, conversation):
+                return conversation
         return UNVERIFIED_ACTION
     return UNVERIFIED_ACTION if require_cli_response else answer
 
@@ -958,7 +958,7 @@ def chat(
                 else:
                     supplied_history = (previous_observations if previous_tool_context
                                         and previous_tool_context in prepared[0]['content'] else ())
-                    answer = _decode_no_action_reply(answer, supplied_history,
+                    answer = _decode_no_action_reply(answer, supplied_history, goal=goal,
                                                      require_cli_response=require_cli_response)
                 return finalize_answer(messages, answer, turn_id=turn_id,
                                        used_action_tool=used_action_tool,
@@ -977,7 +977,8 @@ def chat(
             cached = fingerprint in assessment_cache
             assessment = assessment_cache.get(fingerprint)
             if assessment is None:
-                assessment = assess_task(controller_goal, answer, evidence, reports=reports)
+                assessment = assess_task(controller_goal, answer, evidence, reports=reports,
+                                         check_file_target=require_cli_response and persistent_goal_id is None)
                 assessment_cache[fingerprint] = assessment
             record_event(event_type='task_assessment', event_class='derived', actor='task_controller',
                          turn_id=turn_id, content=assessment.rationale,

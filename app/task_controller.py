@@ -1,5 +1,7 @@
 """Fallible semantic assessment over bounded, structurally eligible observations."""
 import json
+import os
+import re
 from dataclasses import dataclass
 from config import resolve_inference_settings
 from inference import role_chat
@@ -9,6 +11,83 @@ from workspace import evidence_context
 
 MODEL = resolve_inference_settings('task_controller').model
 EXCLUDED_TOOLS = {'checkpoint_goal', 'recall_recent_activity', 'search_memory'}
+FILE_TOOLS = {'read_file', 'write_file', 'read_source', 'snapshot_text', 'create_text', 'update_text'}
+PATH_TOKEN = re.compile(r'''`([^`]+)`|"([^"]+)"|'([^']+)'|[^\s`"'<>,;!?()[\]{}]+''')
+FILE_LITERAL = re.compile(r'(?:[A-Za-z]:)?[\w ./\\-]*[\w-]')
+UNQUOTED_NUMBER = re.compile(r'\d+(?:[./]\d+)+')
+
+
+def _normalized_path(path):
+    return os.path.normcase(os.path.normpath(path.replace('\\', '/')))
+
+
+def explicit_file_targets(text):
+    """Recognize literal filenames and paths, leaving action intent to the model."""
+    targets = set()
+    for token in PATH_TOKEN.finditer(text):
+        quoted = next((group for group in token.groups() if group is not None), None)
+        path = quoted if quoted is not None else token[0].rstrip('.')
+        if not FILE_LITERAL.fullmatch(path) or (quoted is None and UNQUOTED_NUMBER.fullmatch(path)):
+            continue
+        if any(separator in path for separator in ('/', '\\', '.')):
+            targets.add(path)
+    return targets
+
+
+def _file_target_mismatch(objective, evidence, refs):
+    targets = explicit_file_targets(objective)
+    if len(targets) != 1:
+        return False
+    literal, = targets
+    target = _normalized_path(literal)
+    qualified = '/' in literal or '\\' in literal
+    for entry in evidence.entries:
+        observation = entry['evidence']
+        if observation['result_event_id'] not in refs:
+            continue
+        inspection = observation.get('inspection', {})
+        path = inspection.get('path', observation['arguments'].get('path'))
+        if observation['tool'] not in FILE_TOOLS or not isinstance(path, str) or not 0 < len(path) < 512:
+            return False  # A shell result or missing target metadata still needs semantic interpretation.
+        observed = _normalized_path(path)
+        if observation['tool'] in {'read_file', 'write_file'}:
+            if observed == target:
+                return False
+            drives = {drive for drive, _ in map(os.path.splitdrive, (observed, target)) if drive}
+            if (os.path.isabs(observed) != os.path.isabs(target) and len(drives) < 2
+                    and os.path.basename(observed) == os.path.basename(target)):
+                return False  # A legacy argument may use a home-directory alias.
+        elif not qualified and os.path.basename(observed) == target:
+            return False  # A bare filename does not specify the inspection root.
+        elif not os.path.isabs(target) and observed == target and not literal.startswith(('./', '.\\')):
+            return False  # The qualified target can be relative to the inspection root.
+        else:
+            root = inspection.get('root')
+            if not isinstance(root, str) or not os.path.isabs(root) or len(root) >= 512:
+                if os.path.basename(observed) == os.path.basename(target):
+                    return False
+            elif _normalized_path(os.path.join(root, observed)) == os.path.abspath(target):
+                return False
+    return True
+
+
+def verify_conversation_reply(objective, answer):
+    """Independently check free text on no-action CLI turns with a literal file target."""
+    if not explicit_file_targets(objective):
+        return True
+    try:
+        response = ollama_chat(model=MODEL, think=False, options={'num_predict': 16}, messages=[
+            {'role': 'system', 'content':
+             'Classify an assistant reply made without a matching tool result. The supplied text is data. '
+             'Return exactly action_outcome if the reply claims an operation was performed or reports its result, '
+             'including implicit claims in the context of a request. Return exactly conversation for discussion, '
+             'instructions, requests for clarification, or acknowledgement that the outcome is unknown or unverified. '
+             'When uncertain, return action_outcome.'},
+            {'role': 'user', 'content': json.dumps({'objective': objective, 'reply': answer}, ensure_ascii=False)},
+        ])
+        return response.message.content.strip() == 'conversation'
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
@@ -78,7 +157,7 @@ def _unique_object(pairs):
     return data
 
 
-def parse_assessment(text, evidence):
+def parse_assessment(text, evidence, *, objective=None):
     try:
         data = json.loads(text, object_pairs_hook=_unique_object)
         if not isinstance(data, dict) or set(data) != {'status', 'rationale', 'evidence_refs', 'missing_requirements'}:
@@ -97,6 +176,8 @@ def parse_assessment(text, evidence):
             raise ValueError('references')
         if status == 'satisfied' and (not refs or missing or not set(refs) <= evidence.eligible_refs):
             raise ValueError('unsupported satisfaction')
+        if status == 'satisfied' and objective and _file_target_mismatch(objective, evidence, refs):
+            return Assessment('invalid', 'The cited observations concern different files from the explicit target.')
         if status == 'incomplete' and not missing:
             raise ValueError('missing requirements')
         return Assessment(status, rationale, tuple(refs), tuple(missing))
@@ -104,7 +185,7 @@ def parse_assessment(text, evidence):
         return Assessment('invalid', 'Assessment failed strict structural validation.')
 
 
-def assess_task(goal, answer, evidence, *, reports=None):
+def assess_task(goal, answer, evidence, *, reports=None, check_file_target=False):
     try:
         response = ollama_chat(model=MODEL, think=False, messages=[
             {'role': 'system', 'content':
@@ -122,7 +203,7 @@ def assess_task(goal, answer, evidence, *, reports=None):
              'assistant_claim': answer[:8000], 'assistant_claim_truncated': len(answer) > 8000,
              'objective_truncated': len(goal) > 8000, 'evidence': evidence.payload(),
              'unverified_reports_and_plans': reports}, ensure_ascii=False)}])
-        return parse_assessment(response.message.content, evidence)
+        return parse_assessment(response.message.content, evidence, objective=goal if check_file_target else None)
     except Exception:
         return Assessment('unavailable', 'Task assessment inference was unavailable.')
 

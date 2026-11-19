@@ -89,6 +89,43 @@ class ChatActionGroundingTests(unittest.TestCase):
         self.read.assert_called_once_with(path='fixture.txt')
         judge.assert_called_once()
 
+    def test_conversation_label_cannot_hide_unobserved_file_completion(self):
+        for target, assessment in [('fixture.txt', reply('action_outcome')),
+                                   ('docs/README', reply('action_outcome')),
+                                   ('fixture.txt', InferenceError('timeout', role='task_controller'))]:
+            with self.subTest(target=target, assessment=assessment):
+                answers, _, judge = self.run_cli(
+                    [f'Read {target}'], [reply(f'{llm.CONVERSATION_PREFIX} {self.claim}')], [assessment],
+                )
+                self.assertEqual(answers, [llm.UNVERIFIED_ACTION])
+                judge.assert_called_once()
+        self.read.assert_not_called()
+
+    def test_conversation_about_a_named_file_can_pass_without_a_tool(self):
+        answer = 'That is a plain text filename.'
+        answers, _, judge = self.run_cli(
+            ['What kind of name is fixture.txt?'], [reply(f'{llm.CONVERSATION_PREFIX} {answer}')],
+            [reply('conversation')],
+        )
+        self.assertEqual(answers, [answer])
+        self.read.assert_not_called()
+        judge.assert_called_once()
+
+    def test_success_of_a_different_file_does_not_verify_completion(self):
+        for target, wrong_path in [('fixture.txt', 'other.txt'), ('./fixture.txt', 'other/fixture.txt')]:
+            with self.subTest(target=target, wrong_path=wrong_path):
+                answers, events, judge = self.run_cli(
+                    [f'Read {target}'], [reply(calls=[('read_file', {'path': wrong_path})]), reply(self.claim)],
+                    self.satisfy_with_recorded_ref,
+                )
+                answer, = answers
+                observation, = [event for event in events if event['event_type'] == 'tool_result']
+                self.assertNotIn(self.claim, answer)
+                self.assertIn('could not verify completion', answer)
+                self.assertIn(f'read_file "{wrong_path}": tool reported success', answer)
+                self.assertIn(observation['id'], answer)
+                judge.assert_called_once()
+
     def test_permission_denial_cannot_support_success(self):
         self.permission.return_value = False
         answer, outcome, _ = self.run_read(self.satisfy_with_recorded_ref)
@@ -171,10 +208,11 @@ class ChatActionGroundingTests(unittest.TestCase):
             return reply(f'{llm.CONVERSATION_PREFIX} Hello.')
 
         actor = Mock(side_effect=actor_reply)
-        answers, _, judge = self.run_cli(['Hello'], actor, [])
-        self.assertEqual(answers, ['Hello.'])
+        requests = ['Hello', 'What changed in Python 3.14?', 'What is 3/4 as a percentage?', 'Is 11/19/2026 a date?']
+        answers, _, judge = self.run_cli(requests, actor, [])
+        self.assertEqual(answers, ['Hello.'] * len(requests))
         self.read.assert_not_called()
-        actor.assert_called_once()
+        self.assertEqual(actor.call_count, len(requests))
         judge.assert_not_called()
 
     def test_direct_chat_keeps_plain_conversational_output(self):

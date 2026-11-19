@@ -79,6 +79,28 @@ class AssessmentTests(unittest.TestCase):
         self.assertEqual(controller.parse_assessment(verdict(), self.evidence).status, 'invalid')
         self.assertGreater(self.evidence.omitted, 0)
 
+    def test_explicit_file_target_must_match_cited_observation(self):
+        self.evidence = controller.EvidenceBundle()
+        self.evidence.add(*pair(content=json.dumps({'status': 'ok', 'root': str(ROOT), 'path': 'other/a.py',
+                                                   'content': 'synthetic content'})))
+        self.evidence.add(*pair(index=1, content=json.dumps({'status': 'ok', 'root': str(ROOT), 'path': 'nested/a.py',
+                                                           'content': 'synthetic content'})))
+        goal = 'Read `nested\\a.py`.'
+        self.assertEqual(controller.parse_assessment(verdict(), self.evidence, objective=goal).status, 'invalid')
+        matching = controller.parse_assessment(verdict(evidence_refs=['result1']), self.evidence, objective=goal)
+        self.assertEqual(matching.status, 'satisfied')
+
+    def test_absolute_target_uses_recorded_inspection_root(self):
+        self.evidence = controller.EvidenceBundle()
+        for index, directory in enumerate(('other', 'wanted')):
+            self.evidence.add(*pair(index=index, content=json.dumps({
+                'status': 'ok', 'root': str(ROOT / directory), 'path': 'spec.txt', 'content': 'synthetic content',
+            })))
+        goal = f'Read `{ROOT / "wanted" / "spec.txt"}`.'
+        self.assertEqual(controller.parse_assessment(verdict(), self.evidence, objective=goal).status, 'invalid')
+        matching = controller.parse_assessment(verdict(evidence_refs=['result1']), self.evidence, objective=goal)
+        self.assertEqual(matching.status, 'satisfied')
+
     def test_partial_positive_truncation_metadata_and_model_boundary(self):
         with patch.object(controller, 'ollama_chat', return_value=SimpleNamespace(message=SimpleNamespace(content=verdict()))) as model:
             result = controller.assess_task('Locate Store definition', 'a.py:2 defines Store', self.evidence,
