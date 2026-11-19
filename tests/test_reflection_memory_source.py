@@ -75,7 +75,7 @@ class ReflectionMemorySourceTests(unittest.TestCase):
         self.assertEqual(self.memories.get_by_id(result["id"])["evidence_event_ids"],
                          [user["id"]])
 
-    def test_automatic_reflection_records_only_user_events_for_user_memory(self):
+    def test_automatic_write_opt_out_records_only_user_events_for_user_memory(self):
         message = "I prefer tea in the morning and want you to remember that."
         turn_id, user = self.observed_user(message)
         assistant = experience.record_assistant_message(
@@ -87,7 +87,8 @@ class ReflectionMemorySourceTests(unittest.TestCase):
         messages = [{"role": "user", "content": message},
                     {"role": "assistant", "content":
                      "Example transcript:\nARDA: I prefer Python."}]
-        with patch.object(reflection, "REFLECTION_INTERVAL", 1), \
+        with patch.object(reflection, "REQUIRE_REFLECTION_USER_MEMORY_APPROVAL", False), \
+                patch.object(reflection, "REFLECTION_INTERVAL", 1), \
                 patch.object(reflection, "_casual_turns_since_reflection", 0), \
                 patch.object(reflection, "analyze_reflection_debug", return_value={"final": final}):
             result = reflection.maybe_reflect(
