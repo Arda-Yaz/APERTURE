@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from itertools import zip_longest
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -1621,9 +1622,16 @@ class MemoryStore:
 
         # A bounded supplied-record selector supports paraphrases/translation.
         # It selects IDs, never writes generated facts into memory. Current-query
-        # lexical candidates get priority over dialogue and the recent tail.
+        # lexical candidates get priority over dialogue and the history window.
+        # Interleave subjects to give older records a place in the history
+        # window even when another subject dominates recent activity.
+        history_by_subject = {}
+        for record in sorted(records, key=lambda item: item['updated_at'], reverse=True):
+            history_by_subject.setdefault(record['subject'], []).append(record)
+        history = [record for group in zip_longest(*history_by_subject.values())
+                   for record in group if record is not None]
         pool, seen, size = [], set(), 0
-        for record in current + contextual + sorted(records, key=lambda item: item['updated_at'], reverse=True):
+        for record in current + contextual + history:
             if record['id'] in seen:
                 continue
             seen.add(record['id'])
