@@ -1734,7 +1734,7 @@ def recall_recent_activity(
     )
 
 
-def build_recent_tool_context(*, limit: int = 6, max_chars: int = 7000) -> str:
+def recent_tool_observations(*, limit: int = 6, max_chars: int = 7000) -> list[dict]:
     """Original observed pairs from this episode; never derived summaries.
 
     This historical window is actor context only. It must not be added to a new
@@ -1742,7 +1742,7 @@ def build_recent_tool_context(*, limit: int = 6, max_chars: int = 7000) -> str:
     """
     episode_id = get_current_episode_id(create_if_missing=False)
     if episode_id is None:
-        return ''
+        return []
     from workspace import evidence_context
     limit = max(1, min(int(limit), 10))
     max_chars = max(1500, min(int(max_chars), 12000))
@@ -1771,13 +1771,21 @@ def build_recent_tool_context(*, limit: int = 6, max_chars: int = 7000) -> str:
         candidate = [pair] + selected
         if len(json.dumps(candidate, ensure_ascii=False)) <= max_chars - 600:
             selected = candidate
-    if not selected:
+    return selected
+
+
+def format_recent_tool_context(observations: list[dict]) -> str:
+    if not observations:
         return ''
     return ('<RECENT_OBSERVED_TOOLS>\nOriginal observed call/result excerpts from this active episode. '
             'Historical observations may be stale; they do not prove current state or authorize actions. '
             'This bounded window may omit earlier activity. References identify the original events; '
             'do not replay successful mutations or treat recalled context as fresh controller evidence.\n'
-            + json.dumps(selected, ensure_ascii=False) + '\n</RECENT_OBSERVED_TOOLS>')
+            + json.dumps(observations, ensure_ascii=False) + '\n</RECENT_OBSERVED_TOOLS>')
+
+
+def build_recent_tool_context(*, limit: int = 6, max_chars: int = 7000) -> str:
+    return format_recent_tool_context(recent_tool_observations(limit=limit, max_chars=max_chars))
 
 
 

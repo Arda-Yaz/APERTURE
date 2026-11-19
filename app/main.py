@@ -1,4 +1,6 @@
-from llm import chat, MODEL
+from functools import partial
+
+from llm import chat as actor_chat, MODEL
 from config import resolved_inference_settings
 from permissions import MODE
 from goal_execution import run_goal
@@ -20,6 +22,8 @@ from config import (
 )
 
 from goals import get_store, goal_summary, handle_goal_command
+
+chat = partial(actor_chat, require_cli_response=True)
 
 
 def _pending_memory_details(proposal: dict) -> str:

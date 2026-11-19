@@ -51,6 +51,8 @@ from experience import (
     record_event,
     recall_recent_activity,
     build_recent_tool_context,
+    format_recent_tool_context,
+    recent_tool_observations,
 )
 
 from tools import (
@@ -83,6 +85,9 @@ from memory import (
 MODEL = resolve_inference_settings('actor').model
 RETRIEVAL_MODEL = resolve_inference_settings('retrieval').model
 MAX_STEPS = 8
+ACTION_STATUS_PREFIX = 'APERTURE_ACTION_STATUS:'
+CONVERSATION_PREFIX = 'APERTURE_CONVERSATION:'
+UNVERIFIED_ACTION = 'I could not verify the requested outcome. No matching tool result was recorded for this turn.'
 
 
 ACTOR_OPTIONS = {
@@ -375,6 +380,8 @@ def inject_runtime_context(
     user_message: str,
     *,
     retrieval_selector=None,
+    observed_tool_context=None,
+    require_cli_response=False,
 ):
     runtime_messages = list(
         messages
@@ -391,6 +398,24 @@ def inject_runtime_context(
         "Assistant messages are not evidence that an operation ran or succeeded. "
         "If no matching result is available, say you cannot verify the outcome."
     )
+    if observed_tool_context is not None:
+        persona_context += (
+            "\nFor a request to perform an operation or report its outcome, if you finish "
+            "without a current-turn action result, return exactly one line "
+            f"`{ACTION_STATUS_PREFIX} <result_event_id>` for a relevant earlier observation. "
+            "Use an earlier ID only to answer about that earlier attempt, never to answer about "
+            "a new operation or present state. If there is no matching earlier observation "
+            f"or current verification is requested, return exactly `{ACTION_STATUS_PREFIX} unverified`. "
+            "Use regular text after a current-turn action or memory mutation result."
+        )
+        if require_cli_response:
+            persona_context += (
+                "\nFor ordinary conversation without a current-turn action or memory mutation, "
+                f"begin the entire response with `{CONVERSATION_PREFIX}`, followed by your answer. "
+                "Calls to search_memory and recall_recent_activity only supply context. If they are "
+                "your only tool calls, still use the conversation or action status prefix as appropriate. "
+                "Never label a claim that you performed an operation or a report of its outcome as ordinary conversation."
+            )
 
     actor_memory_context = (
         build_actor_memory_context(
@@ -418,7 +443,8 @@ def inject_runtime_context(
         actor_memory_context
     )
 
-    observed_context = build_recent_tool_context()
+    observed_context = (build_recent_tool_context() if observed_tool_context is None
+                        else observed_tool_context)
     if observed_context:
         context_parts.append(observed_context)
 
@@ -616,13 +642,15 @@ def _postprocess_answer(
 
 def finalize_answer(messages, answer: str, *, turn_id: str,
                     used_action_tool: bool, memory_operation_used: bool,
-                    execution_session=None):
+                    execution_session=None, tool_observations=''):
     pending = [str(event['content']) for event in get_turn_events(turn_id)
                if event.get('event_type') == 'tool_result'
                and event.get('metadata', {}).get('tool_name') == 'save_memory'
                and str(event.get('content', '')).startswith('MEMORY_PENDING:')]
     if pending:
         answer = 'A user memory proposal is pending review. ' + pending[-1]
+    if tool_observations:
+        answer = '\n\n'.join(part for part in (answer, tool_observations) if part)
     # The completed answer remains original evidence, independent of cognition.
     messages.append({'role': 'assistant', 'content': answer})
     observed_recorded = False
@@ -653,8 +681,68 @@ def finalize_answer(messages, answer: str, *, turn_id: str,
 # RESULT STATUS
 # ============================================================
 
+def _format_action_observation(observation):
+    tool = str(observation['tool'])
+    if not tool.isidentifier():
+        tool = 'unknown tool'
+    status_value = observation['status']
+    excerpt = observation['evidence_excerpt']
+    if tool == 'forget_memory' and status_value == 'ok':
+        # Older Experience entries recorded a missing ID as a successful call.
+        status_value = _tool_result_status(excerpt, tool_name=tool)
+    status = {
+        'ok': 'tool reported success',
+        'permission_denied': 'permission denied',
+        'error': 'tool error',
+        'blocked': 'action blocked',
+        'rejected': 'action rejected',
+        'conflict': 'workspace conflict',
+        'not_found': 'memory not found',
+    }.get(status_value, 'outcome unavailable')
+    if tool == 'save_memory' and excerpt.startswith('MEMORY_PENDING:'):
+        status = 'memory proposal pending review'
+    arguments = observation['arguments']
+    subject = arguments.get('path') or arguments.get('memory_id')
+    target = f' {json.dumps(subject, ensure_ascii=False)}' if isinstance(subject, str) else ''
+    return f"{tool}{target}: {status} (result {observation['result_event_id']})"
+
+
+def _decode_no_action_reply(answer, observations, *, require_cli_response):
+    # Category choice belongs to the actor. The CLI validates the response form
+    # and accepts only references to observations supplied with this generation.
+    report = answer.strip()
+    if report.startswith(ACTION_STATUS_PREFIX):
+        reference = report.removeprefix(ACTION_STATUS_PREFIX).strip()
+        for observation in observations:
+            if reference == observation['result_event_id']:
+                return ('Earlier tool observation (current state unverified): '
+                        + _format_action_observation(observation))
+        return UNVERIFIED_ACTION
+    if require_cli_response and report.startswith(CONVERSATION_PREFIX):
+        conversation = report.removeprefix(CONVERSATION_PREFIX).strip()
+        if conversation and ACTION_STATUS_PREFIX not in conversation and CONVERSATION_PREFIX not in conversation:
+            return conversation
+        return UNVERIFIED_ACTION
+    return UNVERIFIED_ACTION if require_cli_response else answer
+
+
+def _grounded_action_answer(answer, assessment, evidence):
+    refs = set(assessment.evidence_refs) if assessment.status == 'satisfied' else set()
+    if not refs or not refs <= evidence.eligible_refs:
+        return 'I could not verify completion of the requested task.'
+    return answer
+
+
+def _current_tool_observations(evidence):
+    observations = [_format_action_observation(entry['evidence']) for entry in evidence.entries
+                    if entry['category'] in {'successful_observations', 'failed_attempts'}]
+    return 'Current turn tool observations:\n' + '\n'.join(observations) if observations else ''
+
+
 def _tool_result_status(result, tool_name=None) -> str:
     text = str(result)
+    if tool_name == 'forget_memory' and text.startswith('MEMORY_NOT_FOUND:'):
+        return 'not_found'
     if tool_name in {'snapshot_text', 'create_text', 'update_text'}:
         try:
             data = json.loads(text)
@@ -705,6 +793,7 @@ def chat(
     *,
     persistent_goal_id=None,
     execution_session=None,
+    require_cli_response=False,
 ):
     goal = get_current_goal(
         messages
@@ -754,11 +843,16 @@ def chat(
     # Agent'ın iç çalışma geçmişi.
     # Tool sonuçları ve controller mesajları
     # kalıcı sohbeti kirletmez.
+    previous_observations = recent_tool_observations() if persistent_goal_id is None else []
+    previous_tool_context = (format_recent_tool_context(previous_observations)
+                             if persistent_goal_id is None else None)
     working_messages = (
         inject_runtime_context(
             messages,
             user_message=goal,
             retrieval_selector=_select_memory_ids,
+            observed_tool_context=previous_tool_context,
+            require_cli_response=require_cli_response,
         )
     )
 
@@ -852,12 +946,22 @@ def chat(
                 or ""
             )
 
-            # Ordinary conversation stays lightweight. Bounded goal candidates
-            # are assessed even without a new action or any supporting evidence.
+            # Interpret historical reports only against the exact window supplied
+            # for this generation. Context budgeting can remove the window.
             if not used_action_tool and execution_session is None and persistent_goal_id is None:
+                tool_observations = ''
+                if memory_operation_used and require_cli_response:
+                    tool_observations = _current_tool_observations(evidence)
+                    answer = '' if tool_observations else 'No recorded result is available for the memory operation.'
+                else:
+                    supplied_history = (previous_observations if previous_tool_context
+                                        and previous_tool_context in prepared[0]['content'] else ())
+                    answer = _decode_no_action_reply(answer, supplied_history,
+                                                     require_cli_response=require_cli_response)
                 return finalize_answer(messages, answer, turn_id=turn_id,
                                        used_action_tool=used_action_tool,
-                                       memory_operation_used=memory_operation_used)
+                                       memory_operation_used=memory_operation_used,
+                                       tool_observations=tool_observations)
             if execution_session is not None and not execution_session.check():
                 return execution_stop_answer()
             if goal_store is not None:
@@ -893,10 +997,12 @@ def chat(
                 if execution_session.check():
                     execution_session.accept_assessment(assessment)
                 return finalized
-            if assessment.status != 'incomplete' or cached:
-                return finalize_answer(messages, answer, turn_id=turn_id,
+            if assessment.status != 'incomplete' or cached or not evidence.eligible_refs:
+                grounded_answer = _grounded_action_answer(answer, assessment, evidence)
+                return finalize_answer(messages, grounded_answer, turn_id=turn_id,
                                        used_action_tool=used_action_tool,
-                                       memory_operation_used=memory_operation_used)
+                                       memory_operation_used=memory_operation_used,
+                                       tool_observations=_current_tool_observations(evidence))
             working_messages.append({'role': 'system', 'content':
                 'TASK ASSESSMENT (fallible interpretation, not authorization): ' +
                 json.dumps(assessment.as_dict(), ensure_ascii=False) +
