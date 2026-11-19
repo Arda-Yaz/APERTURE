@@ -11,6 +11,7 @@ from isolation_support import TestTemporaryDirectory, install_guards
 install_guards()
 
 import experience  # noqa: E402
+import main  # noqa: E402
 import memory  # noqa: E402
 import reflection  # noqa: E402
 
@@ -27,6 +28,7 @@ class ReflectionPendingApprovalTests(unittest.TestCase):
         stack.enter_context(patch.object(memory, "_STORE", self.memories))
         stack.enter_context(patch.object(experience, "_STORE", self.events))
         stack.enter_context(patch.object(experience, "_CURRENT_EPISODE_ID", None))
+        stack.enter_context(patch.object(reflection, "REQUIRE_REFLECTION_USER_MEMORY_APPROVAL", False))
 
     def test_validation_requires_structured_confirmation_and_user_extraction(self):
         candidate = {"content": "Arda prefers quiet mornings.",
@@ -82,6 +84,58 @@ class ReflectionPendingApprovalTests(unittest.TestCase):
         self.assertNotIn("MEMORY_SAVED", result)
         self.assertFalse(any(event["event_type"] == "memory_formed"
                              for event in experience.get_turn_events(turn_id)))
+
+    def test_policy_comparison_with_faithful_and_incorrect_proposals(self):
+        cases = (
+            ("On weekday mornings I prefer brewing tea before starting work, because it helps me ease into the day.",
+             "Arda prefers to brew tea before starting work on weekday mornings.", True),
+            ("I still prefer evening walks, though yesterday I took one before breakfast.",
+             "Arda now prefers morning walks.", False),
+        )
+        for require_approval, expected in ((False, (1, 1, 0)), (True, (0, 1, 2))):
+            with (
+                self.subTest(require_approval=require_approval),
+                TestTemporaryDirectory() as directory,
+                ExitStack() as stack,
+            ):
+                root = Path(directory)
+                store = memory.MemoryStore(root / "memory.db")
+                stack.enter_context(patch.object(memory, "_STORE", store))
+                stack.enter_context(patch.object(experience, "_STORE", experience.ExperienceStore(root / "exp.db")))
+                stack.enter_context(patch.object(experience, "_CURRENT_EPISODE_ID", None))
+                stack.enter_context(patch.object(reflection, "REFLECTION_INTERVAL", 1))
+                stack.enter_context(patch.object(reflection, "_casual_turns_since_reflection", 0))
+                stack.enter_context(patch.object(reflection, "REQUIRE_REFLECTION_USER_MEMORY_APPROVAL", require_approval))
+                previous = store.remember("Arda prefers evening walks.", category="preference", subject="user")
+                incorrect_activations = faithful_retained = review_requests = 0
+                for message, content, faithful in cases:
+                    turn = experience.start_turn(message)
+                    candidate = {"content": content, "category": "preference",
+                                 "importance": 3, "needs_confirmation": False}
+                    if not faithful:
+                        candidate["supersedes_memory_id"] = previous["id"]
+                    final = {"user_memory": candidate, "self_memory": None}
+                    with patch.object(reflection, "analyze_reflection_debug", return_value={"final": final}):
+                        outcome = reflection.maybe_reflect(
+                            [{"role": "user", "content": message},
+                             {"role": "assistant", "content": "I understand what you mean."}],
+                            used_action_tool=False, memory_operation_used=False, turn_id=turn)
+                    pending = store.list_pending_user_memories()
+                    review_requests += len(pending)
+                    if pending:
+                        proposal, = pending
+                        self.assertIn("MEMORY_PENDING", outcome)
+                        self.assertTrue(store.get_by_id(previous["id"])["active"])
+                        self.assertEqual(proposal["supersedes_memory_id"], candidate.get("supersedes_memory_id"))
+                        decision = "approve" if faithful else "reject"
+                        main.handle_memory_command(f"/memory {decision} {proposal['id']}")
+                        if not faithful:
+                            self.assertTrue(store.get_by_id(previous["id"])["active"])
+                    active = any(item["content"] == content and item["active"]
+                                 for item in store.recent_records())
+                    faithful_retained += faithful and active
+                    incorrect_activations += not faithful and active
+                self.assertEqual((incorrect_activations, faithful_retained, review_requests), expected)
 
     def test_invalid_confirmation_flag_is_not_automatic_approval(self):
         message = "I prefer quiet mornings for long projects."

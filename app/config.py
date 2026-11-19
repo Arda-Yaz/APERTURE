@@ -86,28 +86,12 @@ def _env_flag(
     name: str,
     default: bool = False,
 ) -> bool:
-
-    fallback = (
-        "1"
-        if default
-        else "0"
-    )
-
-    value = (
-        os.getenv(
-            name,
-            fallback,
-        )
-        .strip()
-        .casefold()
-    )
-
-    return value in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    value = os.getenv(name, "").strip().casefold()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 # ============================================================
@@ -137,4 +121,5 @@ ENABLE_SELF_CONSOLIDATION = (
 
 REQUIRE_REFLECTION_USER_MEMORY_APPROVAL = _env_flag(
     "APERTURE_REQUIRE_REFLECTION_USER_MEMORY_APPROVAL",
+    default=True,
 )

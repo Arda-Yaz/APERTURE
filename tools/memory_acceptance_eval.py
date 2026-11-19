@@ -31,6 +31,9 @@ CLASSES = (
     'temporal_update', 'semantic_fidelity',
 )
 DECISIONS = {'create', 'reject', 'supersede', 'pending'}
+SEMANTIC_VERDICTS = {'faithful', 'unfaithful'}
+SEMANTIC_DIMENSIONS = ('condition', 'exception', 'negation', 'uncertainty', 'attribution')
+SEMANTIC_CHECKS = {'preserved', 'lost', 'not_applicable'}
 
 
 class EvaluationBudgetError(RuntimeError):
@@ -64,10 +67,15 @@ def _write_report(output: Path, report: dict) -> None:
     if output.is_relative_to((ROOT / 'data').resolve()):
         raise ValueError('Evaluation output cannot be under production data.')
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_name(output.name + '.tmp')
-    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2),
-                         encoding='utf-8')
-    os.replace(temporary, output)
+    stream = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8',
+                                        dir=output.parent, delete=False)
+    temporary = Path(stream.name)
+    try:
+        with stream:
+            json.dump(report, stream, ensure_ascii=False, indent=2)
+        os.replace(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _render_dialogue(messages: list[dict]) -> str:
@@ -348,8 +356,16 @@ def run_case(case: dict, directory: Path, *, model_call,
     return result
 
 
+def _reviewable_memory(row: dict) -> bool:
+    before = {record['id']: record for record in row.get('before_memories', [])}
+    return bool(row.get('pending')) or any(
+        record['subject'] == 'user' and record['active']
+        and record != before.get(record['id'])
+        for record in row.get('after_memories', []))
+
+
 def summarize(results: list[dict]) -> dict:
-    """Separate positive capture from negative rejection, never grade wording."""
+    """Report structural decisions and case-level human fidelity separately."""
     summary = {}
     for split in ('dev', 'holdout'):
         subset = [row for row in results if row['split'] == split]
@@ -359,6 +375,9 @@ def summarize(results: list[dict]) -> dict:
                           if row.get('decision_match'))
         timings = [row['total_seconds'] for row in subset
                    if row.get('total_seconds') is not None]
+        reviewable = [row for row in subset if _reviewable_memory(row)]
+        verdicts = Counter(row.get('semantic_verdict') for row in reviewable)
+        reviewed = sum(verdicts[verdict] for verdict in SEMANTIC_VERDICTS)
         summary[split] = {
             'evaluated': len(subset), 'expected': dict(expected),
             'observed': dict(observed), 'decision_matches': dict(matched),
@@ -374,13 +393,77 @@ def summarize(results: list[dict]) -> dict:
                 row['expected']['decision'] in {'reject', 'pending'}
                 and row['observed_decision'] in {'create', 'supersede', 'other_write'}
                 for row in subset),
+            'false_active_supersessions': sum(
+                row['observed_decision'] == 'supersede'
+                and (row['expected']['decision'] != 'supersede'
+                     or row.get('lineage_valid') is False)
+                for row in subset),
+            'pending_proposals': sum(len(row.get('pending', [])) for row in subset),
+            'cases_with_pending_proposals': sum(bool(row.get('pending')) for row in subset),
             'errors': sum(bool(row.get('error')) for row in subset),
             'provenance_failures': sum(row.get('provenance_valid') is False
                                        for row in subset),
             'median_total_seconds': (statistics.median(timings) if timings else None),
-            'semantic_reviewed': 0,
+            'semantic_reviewable': len(reviewable),
+            'semantic_reviewed': reviewed,
+            'semantic_faithful': verdicts['faithful'],
+            'semantic_unfaithful': verdicts['unfaithful'],
+            'semantic_fidelity': verdicts['faithful'] / reviewed if reviewed else None,
         }
     return summary
+
+
+def score_semantic_review(report_path: Path, review_path: Path, output: Path,
+                          *, overwrite: bool = False) -> dict:
+    """Attach attributed judgments to the exact archived run without invoking inference."""
+    output = output.resolve()
+    if output in {report_path.resolve(), review_path.resolve()}:
+        raise ValueError('Scored output must be separate from the report and review.')
+    if output.exists() and not overwrite:
+        raise FileExistsError('Scored output already exists; use --overwrite deliberately.')
+    raw = report_path.read_bytes()
+    report_hash = hashlib.sha256(raw).hexdigest()
+    report = json.loads(raw)
+    review = json.loads(review_path.read_text(encoding='utf-8'))
+    if (review['report_sha256'] != report_hash
+            or not report.get('live') or not report.get('fixture_sha256')):
+        raise ValueError('Review must identify the exact evaluated report by SHA-256.')
+    if ('semantic_source_report_sha256' in report or 'semantic_reviewer' in report
+            or any(row.get('semantic_verdict', 'unreviewed') != 'unreviewed'
+                   for row in report['cases'])):
+        raise ValueError('Semantic review requires a raw, unreviewed report.')
+    reviewer = review.get('reviewer', 'human')
+    if reviewer not in ('human', 'agent'):
+        raise ValueError('Semantic reviewer must be human or agent.')
+    completed = [row for row in report['cases'] if row.get('status') == 'complete']
+    reviewable = {row['id']: row for row in completed if _reviewable_memory(row)}
+    judgments = review['cases']
+    if not isinstance(judgments, dict) or not judgments.keys() <= reviewable.keys():
+        raise ValueError('Semantic reviews require completed cases with saved or pending content.')
+    for case_id, judgment in judgments.items():
+        if not isinstance(judgment, dict):
+            raise ValueError(f'Invalid semantic review for {case_id}.')
+        verdict, reason = judgment.get('verdict'), judgment.get('reason')
+        if not isinstance(verdict, str) or verdict not in SEMANTIC_VERDICTS or not (
+            isinstance(reason, str) and reason.strip()
+        ):
+            raise ValueError(f'Invalid semantic review for {case_id}.')
+        reviewable[case_id]['semantic_verdict'] = verdict
+        reviewable[case_id]['semantic_reason'] = reason
+        if 'checks' in judgment:
+            checks = judgment['checks']
+            if (not isinstance(checks, dict) or checks.keys() != set(SEMANTIC_DIMENSIONS)
+                    or any(not isinstance(value, str) or value not in SEMANTIC_CHECKS
+                           for value in checks.values())
+                    or (verdict == 'faithful' and 'lost' in checks.values())):
+                raise ValueError(f'Invalid semantic checks for {case_id}.')
+            reviewable[case_id]['semantic_checks'] = checks
+    report['semantic_status'] = f'{reviewer} review; see coverage by split'
+    report['semantic_reviewer'] = reviewer
+    report['semantic_source_report_sha256'] = report_hash
+    report['metrics'] = summarize(completed)
+    _write_report(output, report)
+    return report
 
 
 def _localhost_host(raw: str) -> str:
@@ -449,6 +532,9 @@ def evaluate(output: Path, *, fixture: Path = FIXTURE, live: bool = False,
                 'memory_options': dict(reflection.MEMORY_OPTIONS),
                 'timeout_seconds_per_call': timeout_seconds,
             }
+            report['require_reflection_user_memory_approval'] = (
+                reflection.REQUIRE_REFLECTION_USER_MEMORY_APPROVAL
+            )
     try:
         if model_call is None:
             import ollama
@@ -456,15 +542,20 @@ def evaluate(output: Path, *, fixture: Path = FIXTURE, live: bool = False,
                                                   os.environ.get('OLLAMA_HOST',
                                                                  'http://127.0.0.1:11434')))
             report['model_settings']['endpoint'] = host
-            client = ollama.Client(
-                host=host, timeout=_remaining_timeout(budget, timeout_seconds))
-            def bounded_chat(*args, **kwargs):
+            def local_client():
                 return ollama.Client(
-                    host=host, timeout=_remaining_timeout(budget, timeout_seconds)
-                ).chat(*args, **kwargs)
+                    host=host, timeout=_remaining_timeout(budget, timeout_seconds),
+                    follow_redirects=False, trust_env=False,
+                )
+
+            def bounded_chat(*args, **kwargs):
+                with local_client() as client:
+                    return client.chat(*args, **kwargs)
+
             model_call = bounded_chat
             try:
-                models = client.list().model_dump(mode='json').get('models', [])
+                with local_client() as client:
+                    models = client.list().model_dump(mode='json').get('models', [])
                 report['model_metadata'] = next((entry for entry in models
                     if entry.get('model') == report['model']
                     or entry.get('name') == report['model']), None)
@@ -514,6 +605,8 @@ def main(argv=None) -> int:
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--overwrite', action='store_true')
     parser.add_argument('--live', action='store_true')
+    parser.add_argument('--score-report', type=Path)
+    parser.add_argument('--semantic-review', type=Path)
     parser.add_argument('--split', choices=('all', 'dev', 'holdout'), default='all')
     parser.add_argument('--max-cases', type=int, default=30)
     parser.add_argument('--max-calls', type=int, default=80)
@@ -523,11 +616,17 @@ def main(argv=None) -> int:
     output = args.output.resolve()
     if not output.is_relative_to((ROOT / '.reliability-tmp').resolve()):
         parser.error('CLI output must be under .reliability-tmp.')
-    report = evaluate(args.output, live=args.live, split=args.split,
-                      max_cases=args.max_cases,
-                      max_calls=args.max_calls,
-                      timeout_seconds=args.timeout_seconds,
-                      max_seconds=args.max_seconds, overwrite=args.overwrite)
+    if args.score_report or args.semantic_review:
+        if not (args.score_report and args.semantic_review) or args.live:
+            parser.error('Offline scoring requires --score-report and --semantic-review together.')
+        report = score_semantic_review(args.score_report, args.semantic_review,
+                                      output, overwrite=args.overwrite)
+    else:
+        report = evaluate(args.output, live=args.live, split=args.split,
+                          max_cases=args.max_cases,
+                          max_calls=args.max_calls,
+                          timeout_seconds=args.timeout_seconds,
+                          max_seconds=args.max_seconds, overwrite=args.overwrite)
     print(json.dumps({'live': report['live'],
                       'prepared': len(report.get('prepared_cases', [])),
                       'completed': sum(row.get('status') == 'complete'

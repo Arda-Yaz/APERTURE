@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 import unittest
@@ -26,6 +27,7 @@ def response(content='answer', **message_fields):
 
 class ReliabilityConfigurationTests(unittest.TestCase):
     def setUp(self):
+        self.original_environment = dict(os.environ)
         self.environment = patch.dict(os.environ, {}, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -38,6 +40,20 @@ class ReliabilityConfigurationTests(unittest.TestCase):
         self.assertFalse(config._env_flag('APERTURE_DYNAMIC_SELF'))
         self.assertFalse(config._env_flag('APERTURE_RELATIONSHIP'))
         self.assertFalse(config._env_flag('APERTURE_SELF_CONSOLIDATION'))
+
+    def test_automatic_user_memory_requires_approval_unless_explicitly_disabled(self):
+        name = 'APERTURE_REQUIRE_REFLECTION_USER_MEMORY_APPROVAL'
+        startup_environment = {key: value for key, value in self.original_environment.items()
+                               if key != name}
+        for value, expected in ((None, 'True'), ('typo', 'True'), ('0', 'False')):
+            with self.subTest(value=value):
+                env = {} if value is None else {name: value}
+                completed = subprocess.run(
+                    [sys.executable, '-B', '-c',
+                     'from config import REQUIRE_REFLECTION_USER_MEMORY_APPROVAL as policy; print(policy)'],
+                    cwd=Path(config.__file__).resolve().parent,
+                    env={**startup_environment, **env}, capture_output=True, text=True, check=True)
+                self.assertEqual(completed.stdout.strip(), expected)
 
     def test_global_and_role_overrides_follow_precedence_without_mutating_environment(self):
         os.environ.update(APERTURE_MODEL='shared:custom', APERTURE_MODEL_REFLECTION='reflect:custom',

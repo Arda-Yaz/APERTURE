@@ -3,6 +3,7 @@
 import json
 from contextlib import redirect_stderr
 import io
+import os
 from pathlib import Path
 import sys
 import time
@@ -16,7 +17,9 @@ install_guards()
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
+sys.path.insert(0, str(ROOT / 'app'))
 import memory_acceptance_eval as evaluator
+import reflection
 
 
 def response(payload):
@@ -110,9 +113,10 @@ class MemoryAcceptanceEvaluationTests(unittest.TestCase):
                 model, calls = fake_model(decision)
                 budget = {'calls': 0, 'max_calls': 2, 'started': time.perf_counter(),
                           'max_seconds': 30}
-                result = evaluator.run_case(sample_case(decision,
-                    seed=decision == 'supersede'), Path(directory),
-                    model_call=model, budget=budget)
+                with patch.object(reflection, 'REQUIRE_REFLECTION_USER_MEMORY_APPROVAL', False):
+                    result = evaluator.run_case(sample_case(decision,
+                        seed=decision == 'supersede'), Path(directory),
+                        model_call=model, budget=budget)
                 self.assertIsNone(result['error'])
                 self.assertEqual(result['observed_decision'], decision)
                 self.assertTrue(result['decision_match'])
@@ -142,7 +146,81 @@ class MemoryAcceptanceEvaluationTests(unittest.TestCase):
         self.assertEqual(metrics['reject_specificity'], 1)
         self.assertEqual(metrics['pending_capture'], 1)
         self.assertEqual(metrics['supersession_capture'], 1)
+        self.assertEqual(metrics['false_active_supersessions'], 0)
+        self.assertEqual(metrics['pending_proposals'], 1)
+        self.assertEqual(metrics['cases_with_pending_proposals'], 1)
         self.assertEqual(metrics['semantic_reviewed'], 0)
+        self.assertEqual(metrics['semantic_reviewable'], 3)
+        self.assertIsNone(metrics['semantic_fidelity'])
+
+    def test_policy_modes_measure_false_supersession_and_pending_burden(self):
+        case = sample_case('reject', seed=True)
+        outcomes = []
+        for approval in (False, True):
+            with self.subTest(approval=approval), TestTemporaryDirectory() as directory:
+                budget = {'calls': 0, 'max_calls': 2, 'started': time.perf_counter(),
+                          'max_seconds': 30}
+                with patch.object(reflection, 'REQUIRE_REFLECTION_USER_MEMORY_APPROVAL', approval):
+                    result = evaluator.run_case(case, Path(directory),
+                                                model_call=fake_model('supersede')[0],
+                                                budget=budget)
+                self.assertIsNone(result['error'])
+                seed, = result['before_memories']
+                retained = next(record for record in result['after_memories']
+                                if record['id'] == seed['id'])
+                self.assertEqual(retained['active'], approval)
+                self.assertEqual(result['observed_decision'], 'pending' if approval else 'supersede')
+                metrics = evaluator.summarize([result])['dev']
+                outcomes.append(tuple(metrics[name] for name in (
+                    'false_active_writes', 'false_active_supersessions', 'pending_proposals',
+                )))
+        self.assertEqual(outcomes, [(1, 1, 0), (0, 0, 1)])
+
+    def test_offline_fidelity_score_preserves_raw_run_and_decision_score(self):
+        rows = [
+            dict(sample_case('create'), status='complete', decision_match=True,
+                 observed_decision='create', semantic_verdict='unreviewed',
+                 after_memories=[{'id': 'new', 'subject': 'user', 'active': True,
+                                  'content': 'The user prefers technical explanations in Turkish.'}]),
+            dict(sample_case('reject'), id='negative', status='complete',
+                 decision_match=True, observed_decision='reject', semantic_verdict='unreviewed'),
+        ]
+        report = {'live': True, 'fixture_sha256': evaluator._digest(evaluator.FIXTURE),
+                  'model': 'synthetic', 'cases': rows}
+        with TestTemporaryDirectory() as directory:
+            root = Path(directory)
+            source, review_file, output = (root / name for name in ('scored.json.tmp', 'review.json', 'scored.json'))
+            source.write_text(json.dumps(report), encoding='utf-8')
+            review = {'report_sha256': evaluator._digest(source), 'cases': {
+                rows[0]['id']: {'verdict': 'unfaithful', 'reason': 'English code identifier exception omitted.'},
+            }}
+            judgment = review['cases'][rows[0]['id']]
+            judgment['checks'] = dict.fromkeys(evaluator.SEMANTIC_DIMENSIONS, 'not_applicable')
+            judgment['checks']['exception'] = 'lost'
+            review['reviewer'] = 'agent'
+            review_file.write_text(json.dumps(review), encoding='utf-8')
+            with patch.object(evaluator.importlib, 'import_module',
+                              side_effect=AssertionError('offline scoring imported app')):
+                scored = evaluator.score_semantic_review(source, review_file, output)
+            metrics = scored['metrics']['dev']
+            self.assertEqual(metrics['create_capture'], 1)
+            self.assertEqual(metrics['semantic_reviewable'], 1)
+            self.assertEqual(metrics['semantic_reviewed'], 1)
+            self.assertEqual(metrics['semantic_fidelity'], 0)
+            self.assertEqual(scored['model'], report['model'])
+            self.assertEqual(scored['fixture_sha256'], report['fixture_sha256'])
+            self.assertEqual(scored['cases'][0]['after_memories'], rows[0]['after_memories'])
+            self.assertEqual(scored['cases'][0]['semantic_checks'], judgment['checks'])
+            self.assertEqual(scored['semantic_reviewer'], 'agent')
+            self.assertEqual(evaluator._digest(source), review['report_sha256'])
+            review['report_sha256'] = 'wrong run'
+            review_file.write_text(json.dumps(review), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'exact evaluated report'):
+                evaluator.score_semantic_review(source, review_file, output, overwrite=True)
+            review.update(report_sha256=evaluator._digest(output), reviewer='human', cases={})
+            review_file.write_text(json.dumps(review), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'raw, unreviewed report'):
+                evaluator.score_semantic_review(output, review_file, root / 'relabeled.json')
 
     def test_failed_model_attempt_is_counted_and_reported(self):
         with TestTemporaryDirectory() as directory:
@@ -182,6 +260,53 @@ class MemoryAcceptanceEvaluationTests(unittest.TestCase):
             self.assertEqual(report['cases'][0]['status'], 'complete')
             self.assertEqual(json.loads(output.read_text(encoding='utf-8')),
                              report)
+
+    def test_live_metadata_and_model_calls_use_closed_loopback_clients(self):
+        with TestTemporaryDirectory() as directory, \
+                patch.dict(os.environ, {'APERTURE_OLLAMA_HOST': 'http://127.0.0.1:11434'}), \
+                patch('ollama.Client') as constructor:
+            client = constructor.return_value.__enter__.return_value
+            client.list.return_value.model_dump.return_value = {
+                'models': [{'model': reflection.MODEL, 'digest': 'test-model-digest'}],
+            }
+            client.chat.side_effect = fake_model('reject')[0]
+            report = evaluator.evaluate(
+                Path(directory) / 'local.json', live=True, split='dev',
+                max_cases=1, max_calls=2, timeout_seconds=5,
+                temporary_factory=TestTemporaryDirectory,
+            )
+            self.assertTrue(report['complete'])
+            self.assertEqual(report['model_metadata']['digest'], 'test-model-digest')
+            self.assertEqual(client.list.call_count, 1)
+            self.assertEqual(client.chat.call_count, 2)
+            self.assertEqual(constructor.call_count, 3)
+            self.assertEqual(constructor.return_value.__exit__.call_count, 3)
+            for item in constructor.call_args_list:
+                self.assertEqual(item.kwargs, {
+                    'host': 'http://127.0.0.1:11434', 'timeout': 5,
+                    'follow_redirects': False, 'trust_env': False,
+                })
+
+    def test_policy_reports_keep_fixture_source_and_model_options_equal(self):
+        with TestTemporaryDirectory() as directory:
+            reports = []
+            for approval in (False, True):
+                with patch.object(reflection, 'REQUIRE_REFLECTION_USER_MEMORY_APPROVAL', approval):
+                    reports.append(evaluator.evaluate(
+                        Path(directory) / f'{approval}.json', live=True, split='dev',
+                        max_cases=1, max_calls=2, model_call=fake_model('create')[0],
+                        temporary_factory=TestTemporaryDirectory,
+                    ))
+            automatic, queued = reports
+            self.assertTrue(all(report['complete'] for report in reports))
+            for key in ('fixture_sha256', 'source_sha256', 'model', 'model_settings', 'limits'):
+                self.assertEqual(automatic[key], queued[key], key)
+            self.assertFalse(automatic['require_reflection_user_memory_approval'])
+            self.assertTrue(queued['require_reflection_user_memory_approval'])
+            self.assertEqual(automatic['cases'][0]['observed_decision'], 'create')
+            self.assertEqual(queued['cases'][0]['observed_decision'], 'pending')
+            self.assertEqual(automatic['cases'][0]['model_calls'][1]['response'],
+                             queued['cases'][0]['model_calls'][1]['response'])
 
     def test_live_failure_remains_in_incremental_report(self):
         with TestTemporaryDirectory() as directory:

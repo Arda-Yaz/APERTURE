@@ -1,6 +1,14 @@
 # Pending user memory approval
 
-Automatic reflection may identify a durable user memory while remaining unsure whether the user's words support that exact claim. Such a candidate is kept as a pending proposal. It is not available to memory search or ordinary conversation context until the user explicitly approves it.
+Automatic reflection queues user memory candidates for review by default. A
+pending proposal becomes available to memory search and conversation context
+only after explicit approval. Pending replacements leave the previous memory
+active.
+
+Set `$env:APERTURE_REQUIRE_REFLECTION_USER_MEMORY_APPROVAL = '0'` before
+starting APERTURE to allow automatic active writes for candidates the model
+marks as clearly supported. Candidates the model flags for confirmation still
+go to the queue. See the [synthetic policy comparison](MEMORY_ACCEPTANCE_EVALUATION.md#november-2026-policy-comparison).
 
 ## CLI commands
 
