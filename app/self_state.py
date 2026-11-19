@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
-from ollama import chat as ollama_chat
+from config import resolve_inference_settings
+from inference import role_chat
+
+ollama_chat = role_chat('self_state')
 
 
-MODEL = "qwen3:8b"
+MODEL = resolve_inference_settings('self_state').model
 
 SELF_STATE_OPTIONS = {
     "temperature": 0,

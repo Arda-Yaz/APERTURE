@@ -16,11 +16,18 @@ The requirements pin the direct Python dependencies used by the application. The
 
 ## Configure Ollama
 
-Install and start Ollama separately. Pull the model configured for the actor in the current source or environment. The committed baseline uses `qwen3:8b`:
+Install and start Ollama separately. With no model overrides, all inference
+roles use `qwen3.5:4b`.
 
 ```powershell
-ollama pull qwen3:8b
+ollama pull qwen3.5:4b
 ```
+
+Set `APERTURE_MODEL` to change the default for every role. A role-specific
+override such as `APERTURE_MODEL_ACTOR` or `APERTURE_MODEL_REFLECTION` takes
+precedence over that default. The role suffixes are `ACTOR`, `RETRIEVAL`,
+`REFLECTION`, `SELF_STATE`, `RELATIONSHIP`, and `TASK_CONTROLLER`. Pull the
+model selected for each role you use.
 
 The model download is needed for interactive use. The automated tests do not need a running Ollama service and block unmocked model calls.
 

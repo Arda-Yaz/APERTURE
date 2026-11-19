@@ -5,6 +5,7 @@ from pathlib import Path
 from contextlib import contextmanager
 
 import json
+import math
 import re
 import sqlite3
 import unicodedata
@@ -627,7 +628,6 @@ class MemoryStore:
                 WHERE active = 1
                 """
             )
-
 
             # A proposal is not an active memory. Keeping it in this store
             # allows a later approval to change both records in one transaction.
@@ -1560,6 +1560,9 @@ class MemoryStore:
         self,
         query: str,
         limit: int = 5,
+        *,
+        recent_dialogue: str = '',
+        selector=None,
     ) -> list[dict]:
         limit = max(1, min(int(limit), 20))
 
@@ -1575,45 +1578,74 @@ class MemoryStore:
         if not rows:
             return []
 
-        query_normalized = _normalize(query)
-        query_tokens = _tokenize(query)
+        records = [_memory_row_to_dict(row) for row in rows]
+        documents = [_tokenize(row['content']) for row in records]
+        frequency = {}
+        for document in documents:
+            for token in document:
+                frequency[token] = frequency.get(token, 0) + 1
 
-        scored = []
+        def rank(text):
+            tokens = _tokenize(text)
+            normalized = _normalize(text)
+            scores = []
+            for record, document in zip(records, documents):
+                # Corpus frequency discounts shared conversational words without
+                # encoding semantic judgments as language-specific phrase lists.
+                overlap = tokens & document
+                score = sum(math.log((len(records) + 1) / (frequency[token] + .5)) for token in overlap)
+                if normalized and normalized == record['normalized_content']:
+                    score += 5
+                if score > 0:
+                    scores.append((score, record))
+            return [record for _, record in sorted(scores, key=lambda pair:
+                    (pair[0], pair[1]['updated_at']), reverse=True)]
 
-        for row in rows:
-            content_normalized = row["normalized_content"]
-            content_tokens = _tokenize(row["content"])
+        current = rank(query)
+        contextual = rank(recent_dialogue) if recent_dialogue else []
+        fallback = list(current)
+        originals = {record['id']: record for record in records}
 
-            overlap = len(
-                query_tokens.intersection(content_tokens)
-            )
+        def reload_originals(memory_ids):
+            result = []
+            for memory_id in memory_ids:
+                original = originals[memory_id]
+                record = self.get_by_id(memory_id)
+                if (record and record['active'] and record['subject'] == original['subject']
+                        and record['content'] == original['content']):
+                    result.append(record)
+            return result
 
-            score = float(overlap)
+        if selector is None:
+            return reload_originals(record['id'] for record in fallback[:limit])
 
-            if (
-                query_normalized
-                and query_normalized in content_normalized
-            ):
-                score += 5.0
-
-            score += row["importance"] * 0.1
-
-            if overlap > 0 or query_normalized in content_normalized:
-                scored.append((score, row))
-
-        scored.sort(
-            key=lambda item: (
-                item[0],
-                item[1]["importance"],
-                item[1]["updated_at"],
-            ),
-            reverse=True,
-        )
-
-        return [
-            dict(row)
-            for _, row in scored[:limit]
-        ]
+        # A bounded supplied-record selector supports paraphrases/translation.
+        # It selects IDs, never writes generated facts into memory. Current-query
+        # lexical candidates get priority over dialogue and the recent tail.
+        pool, seen, size = [], set(), 0
+        for record in current + contextual + sorted(records, key=lambda item: item['updated_at'], reverse=True):
+            if record['id'] in seen:
+                continue
+            seen.add(record['id'])
+            excerpt = {key: record[key] for key in ('id', 'subject', 'category')}
+            excerpt['content'] = record['content'][:500]
+            excerpt['content_truncated'] = len(record['content']) > 500
+            amount = len(json.dumps(excerpt, ensure_ascii=False).encode('utf-8'))
+            if len(pool) >= 96 or size + amount > 20000:
+                continue
+            size += amount
+            pool.append(excerpt)
+        try:
+            selected = selector(query=query, recent_dialogue=recent_dialogue,
+                                candidates=pool, limit=limit)
+            if not isinstance(selected, list) or len(selected) > limit or any(not isinstance(item, str) for item in selected):
+                raise ValueError('Invalid retrieval ID selection')
+            supplied = {item['id']: item for item in pool}
+            if len(set(selected)) != len(selected) or any(item not in supplied for item in selected):
+                raise ValueError('Unsupplied retrieval ID')
+            return reload_originals(selected)
+        except Exception:
+            return reload_originals(record['id'] for record in fallback[:limit])
 
 
     def top_memories(
@@ -1783,8 +1815,20 @@ def _get_store() -> MemoryStore:
     return _STORE
 
 
+class MemoryValidationContext(str):
+    """Rendered index plus authoritative ownership, never parsed from content."""
+    def __new__(cls, text, memories=()):
+        value = super().__new__(cls, text)
+        value.supplied_owners = {memory['id']: memory['subject'] for memory in memories}
+        return value
+
+
 def build_memory_validation_context(
     limit: int = 40,
+    *,
+    query: str = '',
+    recent_dialogue: str = '',
+    selector=None,
 ) -> str:
     """
     Memory context for internal Reflection validation.
@@ -1794,14 +1838,14 @@ def build_memory_validation_context(
     request temporal supersession.
     """
 
-    memories = (
-        _get_store().top_memories(
-            limit=limit
-        )
-    )
+    if query:
+        memories = _get_store().search(query, limit=min(limit, 20),
+                                       recent_dialogue=recent_dialogue, selector=selector)
+    else:
+        memories = _get_store().top_memories(limit=limit)
 
     if not memories:
-        return (
+        return MemoryValidationContext(
             "<CURRENT_MEMORY_INDEX>\n"
             "No current long-term memories stored.\n"
             "</CURRENT_MEMORY_INDEX>"
@@ -1831,16 +1875,14 @@ def build_memory_validation_context(
             f"id={memory['id']} "
             f"subject={memory['subject']} "
             f"category={memory['category']} "
-            f"| {memory['content']}"
+            f"| {json.dumps(memory['content'], ensure_ascii=False)}"
         )
 
     lines.append(
         "</CURRENT_MEMORY_INDEX>"
     )
 
-    return "\n".join(
-        lines
-    )
+    return MemoryValidationContext('\n'.join(lines), memories)
 
 
 def save_memory(
@@ -2255,27 +2297,23 @@ def build_actor_memory_context(
     *,
     self_limit: int = 6,
     relevant_limit: int = 10,
+    recent_dialogue: str = '',
+    selector=None,
 ) -> str:
     """
     Build one de-duplicated memory context for the actor.
 
-    A small set of APERTURE self-memory provides continuity.
-    Query-relevant memory provides situational context.
-
-    The same memory is included only once.
+    Persona provides general identity continuity. Topic-specific memories,
+    including APERTURE experiences, must pass the same relevance retrieval.
+    self_limit is retained for source compatibility and no longer injects topics.
     """
-
-    self_memories = (
-        _get_store().top_memories_for_subject(
-            subject="aperture",
-            limit=self_limit,
-        )
-    )
 
     relevant_memories = (
         _get_store().search(
             query=query,
             limit=relevant_limit,
+            recent_dialogue=recent_dialogue,
+            selector=selector,
         )
     )
 
@@ -2283,8 +2321,7 @@ def build_actor_memory_context(
     seen_ids = set()
 
     for memory in (
-        list(self_memories)
-        + list(relevant_memories)
+        list(relevant_memories)
     ):
 
         memory_id = str(
@@ -2336,9 +2373,10 @@ def build_actor_memory_context(
     for memory in memories:
 
         lines.append(
-            f"- [{memory['subject']}] "
+            f"- id={memory['id']} [{memory['subject']}] "
             f"[{memory['category']}] "
-            f"{memory['content']}"
+            f"{memory['content']} "
+            f"(source={memory['source']}; evidence_event_ids={json.dumps(memory.get('evidence_event_ids', []))})"
         )
 
     lines.append(

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 
-from ollama import chat as ollama_chat
+from config import REQUIRE_REFLECTION_USER_MEMORY_APPROVAL, resolve_inference_settings
+from inference import InferenceError, role_chat
+
+ollama_chat = role_chat('reflection')
 
 from memory import (
-    _get_store as get_memory_store,
     build_memory_validation_context,
     save_reflection_memory,
+    _get_store as get_memory_store,
 )
 
 from experience import (
@@ -18,7 +21,7 @@ from experience import (
 )
 
 
-MODEL = "qwen3:8b"
+MODEL = resolve_inference_settings('reflection').model
 
 # Her mesajda reflection çalıştırıp sistemi yavaşlatmayalım.
 REFLECTION_INTERVAL = 3
@@ -876,21 +879,27 @@ def _split_dialogue_by_speaker(
 def _parse_json(
     text: str,
 ) -> dict | None:
-    if not text:
-        return None
+    if not isinstance(text, str) or not text.strip():
+        raise InferenceError('malformed_response', role='reflection')
 
     text = text.strip()
+
+    if text == 'null':
+        return None
 
     try:
         start = text.index("{")
         end = text.rindex("}") + 1
 
-        return json.loads(
+        data = json.loads(
             text[start:end]
         )
+        if not isinstance(data, dict):
+            raise ValueError
+        return data
 
-    except Exception:
-        return None
+    except (ValueError, json.JSONDecodeError):
+        raise InferenceError('malformed_response', role='reflection') from None
 
 
 def _normalize_importance(
@@ -988,6 +997,8 @@ def _sanitize_candidate(
                 result[
                     "supersedes_memory_id"
                 ] = target
+            else:
+                return None
 
     return result
 
@@ -1152,11 +1163,20 @@ EXISTING LONG-TERM MEMORY:
             if user_memory is not None:
                 user_memory["needs_confirmation"] = confirmation
 
-    return {
+    result = {
         "user_memory": user_memory,
         "self_memory": self_memory,
     }
-
+    # A validator may reference only the original current records actually
+    # displayed to it, with the same owner. Invalid targets reject the update;
+    # dropping just the target would silently create a contradictory memory.
+    supplied = getattr(existing_memory, 'supplied_owners', {})
+    for key, owner in (('user_memory', 'user'), ('self_memory', 'aperture')):
+        candidate = result[key]
+        if candidate and candidate.get('supersedes_memory_id') is not None:
+            if supplied.get(candidate['supersedes_memory_id']) != owner:
+                result[key] = None
+    return result
 
 # ============================================================
 # REFLECTION PIPELINE
@@ -1164,9 +1184,10 @@ EXISTING LONG-TERM MEMORY:
 
 def analyze_reflection_debug(
     dialogue: str,
-    existing_memory: str,
+    existing_memory: str | None,
     *,
     allow_raw_self_candidate: bool = False,
+    retrieval_selector=None,
     messages: list[dict] | None = None,
 ) -> dict:
     """
@@ -1177,7 +1198,8 @@ def analyze_reflection_debug(
     Code only separates ownership and validates output.
     """
 
-    # Production uses message metadata; legacy string parsing is for dry-run callers.
+    # The string parser remains for explicit dry-run callers. Production passes
+    # structured messages, so content cannot assign itself a different owner.
     user_evidence, self_evidence = (
         _split_messages_by_role(messages) if messages is not None
         else _split_dialogue_by_speaker(dialogue)
@@ -1204,6 +1226,15 @@ def analyze_reflection_debug(
                 self_evidence
             )
         )
+
+    if existing_memory is None:
+        candidate_text = '\n'.join(candidate['content'] for candidate in
+                                   (user_candidate, self_candidate) if candidate)
+        # Extraction precedes retrieval: candidate meaning, rather than global
+        # importance, anchors the temporal-update index.
+        existing_memory = build_memory_validation_context(
+            limit=30, query=candidate_text or user_evidence,
+            recent_dialogue=dialogue, selector=retrieval_selector)
 
     final = (
         validate_memory_candidates(
@@ -1325,7 +1356,7 @@ CURRENT LONG-TERM MEMORY:
     ):
         return None
 
-    return (
+    candidate = (
         _sanitize_candidate(
             data.get(
                 "candidate"
@@ -1334,6 +1365,10 @@ CURRENT LONG-TERM MEMORY:
             allow_supersession=True,
         )
     )
+    if (candidate and candidate.get('supersedes_memory_id') is not None
+            and getattr(existing_memory, 'supplied_owners', {}).get(candidate['supersedes_memory_id']) != 'aperture'):
+        return None
+    return candidate
 
 # ============================================================
 # AUTOMATIC REFLECTION
@@ -1345,6 +1380,7 @@ def maybe_reflect(
     used_action_tool: bool,
     memory_operation_used: bool,
     turn_id: str | None = None,
+    retrieval_selector=None,
 ) -> str | None:
     """
     Occasionally review recent casual conversation.
@@ -1392,12 +1428,6 @@ def maybe_reflect(
     ):
         return None
 
-    existing_memory = (
-        build_memory_validation_context(
-            limit=30,
-        )
-    )
-
     # ========================================================
     # SOURCE EXPERIENCE WINDOW
     # ========================================================
@@ -1413,7 +1443,6 @@ def maybe_reflect(
         for event
         in evidence_events
     ]
-
     user_evidence_event_ids = [
         event["id"] for event in evidence_events
         if event.get("event_class") == "observed"
@@ -1429,8 +1458,9 @@ def maybe_reflect(
         analyze_reflection_debug(
             dialogue=dialogue,
             existing_memory=(
-                existing_memory
+                None
             ),
+            retrieval_selector=retrieval_selector,
             messages=recent_messages,
         )
     )
@@ -1514,7 +1544,7 @@ def maybe_reflect(
             and type(user_memory["needs_confirmation"]) is bool
         ):
 
-            if user_memory.get("needs_confirmation") is True:
+            if REQUIRE_REFLECTION_USER_MEMORY_APPROVAL or user_memory["needs_confirmation"]:
                 proposal = get_memory_store().create_pending_user_memory(
                     content=content,
                     category=category,

@@ -4,14 +4,17 @@ import json
 
 from copy import deepcopy
 
-from ollama import chat as ollama_chat
+from config import resolve_inference_settings
+from inference import role_chat
+
+ollama_chat = role_chat('relationship')
 
 from memory import (
     build_relevant_memory_context,
 )
 
 
-MODEL = "qwen3:8b"
+MODEL = resolve_inference_settings('relationship').model
 
 RELATIONSHIP_OPTIONS = {
     "temperature": 0,

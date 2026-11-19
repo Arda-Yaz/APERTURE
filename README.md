@@ -1323,8 +1323,12 @@ ollama --version
 ## 2. Pull the model
 
 ```powershell
-ollama pull qwen3:8b
+ollama pull qwen3.5:4b
 ```
+
+If you set a model override, pull the model selected for each inference role
+you use. The [installation guide](docs/INSTALLATION.md#configure-ollama)
+lists the role overrides and their precedence.
 
 ---
 
@@ -1648,15 +1652,19 @@ The tool layer currently depends on:
 
 Cross-platform support has not yet been implemented.
 
-### Fixed local model
+### Local model configuration
 
-The current model is directly configured as:
+All inference roles inherit the configured default model, falling back to:
 
 ```text
-qwen3:8b
+qwen3.5:4b
 ```
 
-Model configuration has not yet been centralized.
+`APERTURE_MODEL_<ROLE>` takes precedence over `APERTURE_MODEL`, which defaults
+to the model above. See the [installation guide](docs/INSTALLATION.md#configure-ollama)
+for the available roles.
+Startup shows resolved role settings with endpoint credentials removed. A model
+must already be available to Ollama.
 
 ### Terminal workspace is fixed
 

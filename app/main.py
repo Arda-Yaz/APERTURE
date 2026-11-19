@@ -1,4 +1,6 @@
-from llm import chat
+from llm import chat, MODEL
+from config import resolved_inference_settings
+from permissions import MODE
 from goal_execution import run_goal
 
 from experience import (
@@ -70,6 +72,8 @@ def handle_memory_command(command: str) -> str:
 
 
 def main():
+    print('Inference settings:', resolved_inference_settings())
+    print('Tool permission mode:', MODE)
     previous_episode_id = (
         get_latest_episode_id()
     )
@@ -156,7 +160,7 @@ def main():
                 "cli",
 
             "model":
-                "qwen3:8b",
+                MODEL,
 
             "experimental_cognition": {
                 "dynamic_self":

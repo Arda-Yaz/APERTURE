@@ -1,10 +1,13 @@
 """Fallible semantic assessment over bounded, structurally eligible observations."""
 import json
 from dataclasses import dataclass
-from ollama import chat as ollama_chat
+from config import resolve_inference_settings
+from inference import role_chat
+
+ollama_chat = role_chat('task_controller')
 from workspace import evidence_context
 
-MODEL = 'qwen3:8b'
+MODEL = resolve_inference_settings('task_controller').model
 EXCLUDED_TOOLS = {'checkpoint_goal', 'recall_recent_activity', 'search_memory'}
 
 

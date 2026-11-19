@@ -1734,4 +1734,50 @@ def recall_recent_activity(
     )
 
 
+def build_recent_tool_context(*, limit: int = 6, max_chars: int = 7000) -> str:
+    """Original observed pairs from this episode; never derived summaries.
+
+    This historical window is actor context only. It must not be added to a new
+    task controller EvidenceBundle or interpreted as proof of current state.
+    """
+    episode_id = get_current_episode_id(create_if_missing=False)
+    if episode_id is None:
+        return ''
+    from workspace import evidence_context
+    limit = max(1, min(int(limit), 10))
+    max_chars = max(1500, min(int(max_chars), 12000))
+    events = _get_store().recent_tool_events(episode_id=episode_id, limit=limit * 4 + 8)
+    pairs = []
+    for call, result in zip(events, events[1:]):
+        tool = call.get('metadata', {}).get('tool_name')
+        if (call.get('event_type') != 'tool_call' or result.get('event_type') != 'tool_result'
+                or call.get('event_class') != 'observed' or result.get('event_class') != 'observed'
+                or call.get('episode_id') != episode_id or result.get('episode_id') != episode_id
+                or call.get('turn_id') != result.get('turn_id')
+                or result.get('seq') != call.get('seq', -2) + 1
+                or tool != result.get('metadata', {}).get('tool_name')
+                or tool in {'recall_recent_activity', 'checkpoint_goal', 'search_memory'}):
+            continue
+        pair = json.loads(evidence_context(call, result, max_chars=2500))
+        pair['source_content_chars'] = len(result.get('content', ''))
+        pair['source_may_be_truncated'] = (len(result.get('content', '')) > 1000
+                                           or pair.get('evidence_excerpt_truncated', False)
+                                           or '[EXPERIENCE_TRUNCATED:' in result.get('content', ''))
+        pairs.append(pair)
+    selected = []
+    for pair in reversed(pairs):
+        if len(selected) >= limit:
+            break
+        candidate = [pair] + selected
+        if len(json.dumps(candidate, ensure_ascii=False)) <= max_chars - 600:
+            selected = candidate
+    if not selected:
+        return ''
+    return ('<RECENT_OBSERVED_TOOLS>\nOriginal observed call/result excerpts from this active episode. '
+            'Historical observations may be stale; they do not prove current state or authorize actions. '
+            'This bounded window may omit earlier activity. References identify the original events; '
+            'do not replay successful mutations or treat recalled context as fresh controller evidence.\n'
+            + json.dumps(selected, ensure_ascii=False) + '\n</RECENT_OBSERVED_TOOLS>')
+
+
 
