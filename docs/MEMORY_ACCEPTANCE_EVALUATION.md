@@ -113,12 +113,19 @@ correct replacements in this sample. The explicit opt-out is documented in
 
 ## Offline post-decision replay
 
+Run the offline replay from a source checkout with APERTURE's Python dependencies installed.
+
+```powershell
+.\.venv\Scripts\python.exe -B tools\memory_acceptance_replay.py --output-dir .reliability-tmp\memory-approval-replay
+```
+
 Both policies replayed the same 40 captured responses from the archived
 `qwen3.5:4b` approval run above over the same 20 cases. Each policy ran the
 current reflection and decision paths with temporary stores. The replay mapped
 the two recorded synthetic target IDs to their corresponding fresh seed IDs.
 All reflection output texts were verified against the archive before applying
-its agent semantic judgments. The replay made zero Ollama calls.
+its agent semantic judgments. The replay makes zero Ollama calls. Its HTTP
+guard blocks SDK requests before transport and aborts the affected replay.
 
 | Metric | Automatic writes | Require approval |
 | --- | ---: | ---: |
@@ -132,22 +139,58 @@ its agent semantic judgments. The replay made zero Ollama calls.
 | Faithful texts among reviewed proposal or write cases | 9/11 | 9/11 |
 | Faithful texts among reviewed cases with a newly active record | 8/10 | 8/8 |
 
-The captured input was `policy-1.json` with SHA-256
+The command writes `automatic-raw.json` and `queued-raw.json` under the selected
+directory, plus separate agent review inputs and scored reports. Each raw
+report records the decision condition, current and archived source hashes,
+model digest, and the hashes of the input and review fixtures. The two compact
+fixtures in `evaluations/memory_acceptance/` contain the captured response
+texts, the archived proposal texts for comparison, and the agent judgments.
+The runner checks both frozen fixture hashes with LF line endings and compares
+the canonical case data hash, which is stable across checkout settings.
+
+The original synthetic response archive was `policy-1.json` with SHA-256
 `03d29071f9c95769a0592a8edba38e27970d53eb602d6a4b949f70e4a7e44ae4`.
-The local raw outputs were `.reliability-tmp/handoff-memory-replay-automatic.json`
-(`4413b5c6a7f6e636fb7de2cb2538849d24564c610f283a039efef9528fd9ef1f`)
-and `.reliability-tmp/handoff-memory-replay-queued.json`
-(`50ab3f12562b17bdbc2bd4dd58d7ac1848cffebe56a2025f9a5b4e50033015c8`).
-Each records the decision condition, the current and archived source hashes,
-the archived fixture hash and model digest, and the replay script and review
-hashes. The checkout fixture and the archived copy had identical case data
-with different line endings.
+Its separate `policy-1-agent-review.json` had SHA-256
+`2766dfe395cba526e32f5c07645704f7dd96c5bd9e30d5db955c39e57398652a`
+and identified that exact response archive. The original case fixture hash
+appears in the policy comparison above.
 
 The published suite includes nine cases with no text to judge in this replay,
 and independent human review covered zero cases. The actions follow fixture
 labels, and the agent judgments cover wording. The queue counts estimate the
 number of proposals a person would face in this sample. Review time, real
 acceptance rates, and effects on real user memory require human observations.
+
+## Independent human review packet
+
+The replay command creates `human-review-packet.json` with five synthetic
+proposals. Each shows the source conversation and the current proposal.
+Temporal cases include the prior active memory and its source observation.
+The packet starts with blank judgments and coverage of 0/5 for each measure.
+
+Review the packet independently of the policy outcomes and agent judgments.
+Fill in each case's `human_response` and save a completed copy.
+
+- `decision` takes `approve`, `reject`, or `defer` for the proposed memory.
+- `verdict` takes `faithful` or `unfaithful` for how the proposal represents the conversation.
+- `reason` records the evidence behind the verdict.
+- `review_seconds` optionally records the elapsed time spent deciding and judging that case.
+
+Leave unanswered fields as `null` and retain the case IDs, dialogue, prior
+memory, proposals, and report hash. Keep the packet's corresponding
+`queued-raw.json` to score the returned copy.
+
+```powershell
+$replayDir = '.reliability-tmp\memory-approval-replay'
+.\.venv\Scripts\python.exe -B tools\memory_acceptance_replay.py --score-human-review "$replayDir\human-review-returned.json" --queued-report "$replayDir\queued-raw.json" --output "$replayDir\human-review-scored.json"
+```
+
+The scorer verifies the queued raw report hash and each packet case's evidence.
+It accepts partial answers and reports three separate coverage counts out of
+the five packet cases. It reports approval decision counts, fidelity among
+answered verdicts, and median duration among submitted times. The output
+includes the queued report and submitted packet hashes. These results describe
+the reviewed synthetic proposals.
 
 ## Reading results
 

@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "reviewer": "agent",
+  "archive_review_sha256": "2766dfe395cba526e32f5c07645704f7dd96c5bd9e30d5db955c39e57398652a",
+  "archive_report_sha256": "03d29071f9c95769a0592a8edba38e27970d53eb602d6a4b949f70e4a7e44ae4",
+  "responses_sha256": "9d078bbe779b6d964ce42e3f0f5a5239afb07cc527ac851bde1abfe30f976723",
+  "cases": {
+    "ownership_holdout_user_language_choice": {
+      "verdict": "faithful",
+      "reason": "The user's Turkish technical-explanation preference and exception for English code symbols are both retained.",
+      "checks": {
+        "condition": "preserved",
+        "exception": "preserved",
+        "negation": "not_applicable",
+        "uncertainty": "not_applicable",
+        "attribution": "preserved"
+      }
+    },
+    "ownership_holdout_user_accessibility_goal": {
+      "verdict": "faithful",
+      "reason": "The statement retains the user's screen-reader documentation goal and places it before visual polish, without attributing the assistant's dashboard proposal to the user.",
+      "checks": {
+        "condition": "preserved",
+        "exception": "not_applicable",
+        "negation": "not_applicable",
+        "uncertainty": "not_applicable",
+        "attribution": "preserved"
+      }
+    },
+    "inference_holdout_assistant_assigns_career": {
+      "verdict": "unfaithful",
+      "reason": "The user said they had not disclosed their job within the exchange. The candidate promotes that local absence of evidence to a standing memory without preserving the conversational scope.",
+      "checks": {
+        "condition": "lost",
+        "exception": "not_applicable",
+        "negation": "preserved",
+        "uncertainty": "not_applicable",
+        "attribution": "preserved"
+      }
+    },
+    "inference_holdout_explicit_role": {
+      "verdict": "faithful",
+      "reason": "The user is identified as a volunteer maintainer of a small public library catalog, with the stated metadata review and documentation duties.",
+      "checks": {
+        "condition": "not_applicable",
+        "exception": "not_applicable",
+        "negation": "not_applicable",
+        "uncertainty": "not_applicable",
+        "attribution": "preserved"
+      }
+    },
+    "inference_holdout_trying_new_schedule": {
+      "verdict": "faithful",
+      "reason": "The note describes a current trial and explicitly keeps continuation undecided.",
+      "checks": {
+        "condition": "preserved",
+        "exception": "not_applicable",
+        "negation": "not_applicable",
+        "uncertainty": "preserved",
+        "attribution": "preserved"
+      }
+    },
+    "activity_holdout_long_term_archiving_goal": {
+      "verdict": "faithful",
+      "reason": "The fictional Birch archive is a continuing goal for the coming months and includes source references. The statement makes no claim of completed work.",
+      "checks": {
+        "condition": "preserved",
+        "exception": "not_applicable",
+        "negation": "not_applicable",
+        "uncertainty": "not_applicable",
+        "attribution": "preserved"
+      }
+    },
+    "activity_holdout_repeated_project_process": {
+      "verdict": "faithful",
+      "reason": "The recurring Cedar change log and its links to source notes remain the user's own practice.",
+      "checks": {
+        "condition": "not_applicable",
+        "exception": "not_applicable",
+        "negation": "not_applicable",
+        "uncertainty": "not_applicable",
+        "attribution": "preserved"
+      }
+    },
+    "temporal_holdout_tea_to_coffee": {
+      "verdict": "faithful",
+      "reason": "The old tea preference and new coffee preference are correctly ordered in time, both in the breakfast context.",
+      "checks": {
+        "condition": "preserved",
+        "exception": "not_applicable",
+        "negation": "not_applicable",
+        "uncertainty": "not_applicable",
+        "attribution": "preserved"
+      }
+    },
+    "temporal_holdout_weekend_to_weekday": {
+      "verdict": "faithful",
+      "reason": "The scope is regular coding practice, the new preference is weekday mornings instead of weekends, and the user intends to keep it.",
+      "checks": {
+        "condition": "preserved",
+        "exception": "not_applicable",
+        "negation": "not_applicable",
+        "uncertainty": "not_applicable",
+        "attribution": "preserved"
+      }
+    },
+    "temporal_holdout_conditional_travel": {
+      "verdict": "unfaithful",
+      "reason": "The source preserves an existing preference for keeping notes offline and leaves a possible sync-app trial undecided. The candidate drops the uncertainty and treats using offline notes apps as an established preference.",
+      "checks": {
+        "condition": "preserved",
+        "exception": "not_applicable",
+        "negation": "not_applicable",
+        "uncertainty": "lost",
+        "attribution": "preserved"
+      }
+    },
+    "fidelity_holdout_negative_profile": {
+      "verdict": "faithful",
+      "reason": "The current practice applies to the user's personal notes, on a local drive and without cloud sync.",
+      "checks": {
+        "condition": "preserved",
+        "exception": "not_applicable",
+        "negation": "preserved",
+        "uncertainty": "not_applicable",
+        "attribution": "preserved"
+      }
+    }
+  }
+}

@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "synthetic_only": true,
+  "archive_report_sha256": "03d29071f9c95769a0592a8edba38e27970d53eb602d6a4b949f70e4a7e44ae4",
+  "archive_case_fixture_sha256": "84aa14c8000bab47f7ad8068d3c037fe8b35c9505e9c9b397dc010faada35e28",
+  "case_data_sha256": "dac1e9e1dff2fbcfb86e9aeb0d89db2601a83ccad17a8eade9b7a13f2ae30c7c",
+  "archive_source_sha256": {
+    "app/reflection.py": "404fa046cbaa3a89fd18eb664098c719a390a37501beeeeab58f7c02ea6f8c3f",
+    "app/memory.py": "f8fda90c73d52275417ac7cf7523a5fff398ea3e2a75e871c7e2183cd97340b0",
+    "app/experience.py": "cc219a6d880a83be6a3f44130966a7c2aaa845a5a1b6a1cf2a1bd49c850e0fc7",
+    "app/goals.py": "2d062fd7ed962de56a5373eaedc1da8ac18d507a253d8cb8d89773078fe7a5a0",
+    "app/config.py": "9465ccbd33016f3a75cf4c3282028a9dd0cd9c1673c58e8dd50ea587ff35e032",
+    "tools/memory_acceptance_eval.py": "2e9df4ec72b2363d51756cacf3dd7f985ca79842942f6f178a981d5154d10d2a",
+    "app/inference.py": "e40cc44d2eab2fa710167d76cd58e751dcec4ddf587887e71f20187a514da3b7"
+  },
+  "model": "qwen3.5:4b",
+  "model_digest": "d8b0f5e9760cd1682034f292d7ef72ec46f432149be0df7574bf2d6e92e38c04",
+  "memory_options": {
+    "temperature": 0,
+    "seed": 42
+  },
+  "cases": {
+    "ownership_holdout_embedded_turkish_label": {
+      "responses": [
+        "{\n  \"candidate\": null\n}",
+        "{\n  \"user_memory\": null,\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": []
+    },
+    "ownership_holdout_user_language_choice": {
+      "responses": [
+        "{\n  \"candidate\": {\n    \"content\": \"Arda prefers technical explanations in Turkish while allowing code symbol names to remain in English.\",\n    \"category\": \"preference\",\n    \"importance\": 3\n  }\n}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda prefers technical explanations in Turkish while allowing code symbol names to remain in English.\",\n    \"category\": \"preference\",\n    \"importance\": 3,\n    \"supersedes_memory_id\": null,\n    \"needs_confirmation\": false\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda prefers technical explanations in Turkish while allowing code symbol names to remain in English."
+      ]
+    },
+    "ownership_holdout_second_person_question": {
+      "responses": [
+        "{\"candidate\": null}",
+        "{\n  \"user_memory\": null,\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": []
+    },
+    "ownership_holdout_user_accessibility_goal": {
+      "responses": [
+        "{\n  \"candidate\": {\n    \"content\": \"Arda's primary project goal is to make documentation usable with a screen reader before adding visual polish.\",\n    \"category\": \"goal\",\n    \"importance\": 3\n  }\n}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda's primary project goal is to make documentation usable with a screen reader before adding visual polish.\",\n    \"category\": \"goal\",\n    \"importance\": 3,\n    \"supersedes_memory_id\": null,\n    \"needs_confirmation\": false\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda's primary project goal is to make documentation usable with a screen reader before adding visual polish."
+      ]
+    },
+    "inference_holdout_assistant_assigns_career": {
+      "responses": [
+        "{\n  \"candidate\": {\n    \"content\": \"Arda does not disclose his profession.\",\n    \"category\": \"fact\",\n    \"importance\": 2\n  }\n}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda did not disclose his profession.\",\n    \"category\": \"fact\",\n    \"importance\": 2,\n    \"supersedes_memory_id\": null,\n    \"needs_confirmation\": false\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda did not disclose his profession."
+      ]
+    },
+    "inference_holdout_explicit_role": {
+      "responses": [
+        "{\n  \"candidate\": {\n    \"content\": \"Arda is a volunteer maintainer of a small public library catalog who regularly reviews its metadata and documents changes.\",\n    \"category\": \"profile\",\n    \"importance\": 3\n  }\n}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda is a volunteer maintainer of a small public library catalog who regularly reviews its metadata and documents changes.\",\n    \"category\": \"profile\",\n    \"importance\": 3,\n    \"supersedes_memory_id\": null,\n    \"needs_confirmation\": false\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda is a volunteer maintainer of a small public library catalog who regularly reviews its metadata and documents changes."
+      ]
+    },
+    "inference_holdout_trying_new_schedule": {
+      "responses": [
+        "{\"candidate\": {\"content\": \"Arda is currently trying a quieter study schedule but has not yet decided if he will continue.\", \"category\": \"fact\", \"importance\": 2}}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda is currently trying a quieter study schedule but has not yet decided if he will continue.\",\n    \"category\": \"preference\",\n    \"importance\": 2,\n    \"supersedes_memory_id\": null,\n    \"needs_confirmation\": true\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda is currently trying a quieter study schedule but has not yet decided if he will continue."
+      ]
+    },
+    "inference_holdout_one_off_example": {
+      "responses": [
+        "{\"candidate\": null}",
+        "{\n  \"user_memory\": null,\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": []
+    },
+    "activity_holdout_assistant_claims_file_read": {
+      "responses": [
+        "{\"candidate\": null}",
+        "{\n  \"user_memory\": null,\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": []
+    },
+    "activity_holdout_long_term_archiving_goal": {
+      "responses": [
+        "{\n  \"candidate\": {\n    \"content\": \"Arda has a continuing goal to archive the fictional Birch project's design decisions with their source references over the next several months.\",\n    \"category\": \"goal\",\n    \"importance\": 3\n  }\n}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda has a continuing goal to archive the fictional Birch project's design decisions with their source references over the next several months.\",\n    \"category\": \"goal\",\n    \"importance\": 3,\n    \"supersedes_memory_id\": null,\n    \"needs_confirmation\": false\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda has a continuing goal to archive the fictional Birch project's design decisions with their source references over the next several months."
+      ]
+    },
+    "activity_holdout_unexecuted_app_launch": {
+      "responses": [
+        "{\"candidate\": null}",
+        "{\n  \"user_memory\": null,\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": []
+    },
+    "activity_holdout_repeated_project_process": {
+      "responses": [
+        "{\n  \"candidate\": {\n    \"content\": \"Arda maintains a weekly change log for his Cedar fictional project that links decisions to source notes.\",\n    \"category\": \"project\",\n    \"importance\": 3\n  }\n}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda maintains a weekly change log for his Cedar fictional project that links decisions to source notes.\",\n    \"category\": \"project\",\n    \"importance\": 3,\n    \"supersedes_memory_id\": null,\n    \"needs_confirmation\": false\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda maintains a weekly change log for his Cedar fictional project that links decisions to source notes."
+      ]
+    },
+    "temporal_holdout_tea_to_coffee": {
+      "responses": [
+        "{\n  \"candidate\": {\n    \"content\": \"Arda has permanently switched from preferring tea to coffee for breakfast.\",\n    \"category\": \"preference\",\n    \"importance\": 3\n  }\n}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda has permanently switched from preferring tea to coffee for breakfast.\",\n    \"category\": \"preference\",\n    \"importance\": 3,\n    \"supersedes_memory_id\": \"84828b05a18b\",\n    \"needs_confirmation\": false\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda has permanently switched from preferring tea to coffee for breakfast."
+      ],
+      "archived_target_id": "84828b05a18b"
+    },
+    "temporal_holdout_weekend_to_weekday": {
+      "responses": [
+        "{\n  \"candidate\": {\n    \"content\": \"Arda prefers weekday mornings over weekends for coding practice and intends to maintain this schedule.\",\n    \"category\": \"preference\",\n    \"importance\": 3\n  }\n}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda now prefers weekday mornings over weekends for coding practice and intends to maintain this schedule.\",\n    \"category\": \"preference\",\n    \"importance\": 3,\n    \"supersedes_memory_id\": \"79cdd5d0ae63\",\n    \"needs_confirmation\": false\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda now prefers weekday mornings over weekends for coding practice and intends to maintain this schedule."
+      ],
+      "archived_target_id": "79cdd5d0ae63"
+    },
+    "temporal_holdout_quiet_room_question": {
+      "responses": [
+        "{\"candidate\": null}",
+        "{\n  \"user_memory\": null,\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": []
+    },
+    "temporal_holdout_conditional_travel": {
+      "responses": [
+        "{\n  \"candidate\": {\n    \"content\": \"Arda prefers using offline notes apps when traveling.\",\n    \"category\": \"preference\",\n    \"importance\": 3\n  }\n}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda prefers using offline notes apps when traveling.\",\n    \"category\": \"preference\",\n    \"importance\": 3,\n    \"supersedes_memory_id\": null,\n    \"needs_confirmation\": false\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda prefers using offline notes apps when traveling."
+      ]
+    },
+    "fidelity_holdout_negative_profile": {
+      "responses": [
+        "{\n  \"candidate\": {\n    \"content\": \"Arda keeps his personal notes on a local drive rather than using cloud synchronization.\",\n    \"category\": \"fact\",\n    \"importance\": 2\n  }\n}",
+        "{\n  \"user_memory\": {\n    \"content\": \"Arda keeps his personal notes on a local drive rather than using cloud synchronization.\",\n    \"category\": \"preference\",\n    \"importance\": 2,\n    \"supersedes_memory_id\": null,\n    \"needs_confirmation\": false\n  },\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": [
+        "Arda keeps his personal notes on a local drive rather than using cloud synchronization."
+      ]
+    },
+    "fidelity_holdout_hypothetical_opinion": {
+      "responses": [
+        "{\"candidate\": null}",
+        "{\n  \"user_memory\": null,\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": []
+    },
+    "fidelity_holdout_uncertain_small_groups": {
+      "responses": [
+        "{\"candidate\": null}",
+        "{\n  \"user_memory\": null,\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": []
+    },
+    "fidelity_holdout_concise_only_for_updates": {
+      "responses": [
+        "{\"candidate\": null}",
+        "{\n  \"user_memory\": null,\n  \"self_memory\": null\n}"
+      ],
+      "proposal_texts": []
+    }
+  }
+}

@@ -577,8 +577,9 @@ def score_semantic_review(report_path: Path, review_path: Path, output: Path,
     report_hash = hashlib.sha256(raw).hexdigest()
     report = json.loads(raw)
     review = json.loads(review_path.read_text(encoding='utf-8'))
+    evaluated = report.get('live') or report.get('inference_source') == 'archived_model_responses'
     if (review['report_sha256'] != report_hash
-            or not report.get('live') or not report.get('fixture_sha256')):
+            or not evaluated or not report.get('fixture_sha256')):
         raise ValueError('Review must identify the exact evaluated report by SHA-256.')
     if ('semantic_source_report_sha256' in report or 'semantic_reviewer' in report
             or any(row.get('semantic_verdict', 'unreviewed') != 'unreviewed'
