@@ -409,7 +409,14 @@ Known destructive commands such as file deletion, formatting, shutdown, and regi
 
 # Permission Model
 
-APERTURE currently supports three permission strategies.
+APERTURE starts with the `memory` tool profile (`MEMORY_ASSISTANT`). Memory
+operations retain their ownership checks. Scoped workspace tools require roots
+inside `APERTURE_WORKSPACE`, which defaults to this repository. General file
+access, terminal execution and application launching are denied in dispatch.
+Unknown tools always fail closed. Workspace writes still require an active goal
+and individual permission. See [Day 1 reliability](docs/RELIABILITY_DAY1.md).
+
+The following advanced permission strategies are retained for explicit opt-in.
 
 ## AUTONOMOUS
 
@@ -423,7 +430,7 @@ Examples:
 - application launching,
 - terminal execution.
 
-Sensitive or unknown operations still require confirmation.
+Unknown operations are denied. File writes still require confirmation.
 
 ## BALANCED
 
@@ -435,10 +442,10 @@ Other actions require confirmation.
 
 Actions require explicit permission.
 
-The current development configuration uses:
+To explicitly enable the advanced tools for a process:
 
-```python
-MODE = "AUTONOMOUS"
+```powershell
+$env:APERTURE_TOOL_PROFILE = 'advanced'
 ```
 
 The permission system is intentionally simple for now and is planned to become more granular later.
@@ -525,10 +532,11 @@ This allows equivalent statements to exist independently for different subjects.
 
 For actor context, APERTURE ranks active memories by weighted token overlap with
 the current request and recent dialogue. It assembles a bounded pool from
-current-query matches, dialogue matches, and recent records interleaved by
-subject. The retrieval model selects relevant IDs from this pool and can return
-an empty list. The store validates the selection and reloads the original
-active records, preserving their ownership and provenance.
+current-query matches, dialogue matches, and records interleaved by subject.
+After lexical matches, a subject with more than 96 active records can contribute
+its two oldest records before the recent-record pass. The retrieval model can
+select relevant IDs or return an empty list. The store validates the selection
+and reloads the original active records, preserving ownership and provenance.
 
 The `search_memory` tool directly ranks active memories by token overlap with
 its query. When the actor's selector fails or returns invalid IDs, the actor

@@ -122,7 +122,7 @@ def run_goal(messages, *, persistent_goal_id, cycles):
             previous = len(session.seen)
             session.assessment = None
             answer = chat(messages, persistent_goal_id=persistent_goal_id, execution_session=session)
-            print(answer)
+            # The CLI displays the returned final answer once after this run.
             print(f'[GOAL] New observations: {len(session.seen) - previous}')
             if not session.check():
                 break
