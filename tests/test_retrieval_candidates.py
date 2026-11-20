@@ -50,3 +50,32 @@ class RetrievalCandidateTests(unittest.TestCase):
         self.assertEqual(result, [])
         self.assertEqual(model.call_args.kwargs['format'], 'json')
         self.assertEqual(model.call_args.kwargs['role'], 'retrieval')
+
+    def test_crowded_owner_reserves_old_active_records_after_lexical_matches(self):
+        with TestTemporaryDirectory() as directory:
+            store = MemoryStore(Path(directory) / 'memory.db')
+
+            def remember(content):
+                return store.remember(content=content, category='fact', importance=3,
+                                      subject='user', source='fixture')
+
+            forgotten = remember('The user filed violet beads beside the kiln.')
+            old = remember('Mira wears earmuffs while firing clay.')
+            older = remember('Wet canvas is kept beneath the workbench.')
+            for index in range(100):
+                remember(f'Studio shelf {index} has a ceramic sample.')
+            lexical = remember('Quiet hours start at 18:00.')
+            self.assertTrue(store.forget(forgotten['id']))
+            captured = []
+
+            def select(**request):
+                captured.extend(request['candidates'])
+                return [old['id']]
+
+            found = store.search('quiet hours', selector=select)
+        self.assertEqual([row['id'] for row in found], [old['id']])
+        self.assertEqual(found[0]['subject'], 'user')
+        self.assertEqual(captured[0]['id'], lexical['id'])
+        supplied = {row['id'] for row in captured}
+        self.assertTrue({old['id'], older['id']}.issubset(supplied))
+        self.assertNotIn(forgotten['id'], supplied)

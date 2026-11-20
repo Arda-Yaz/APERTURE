@@ -15,6 +15,9 @@ import uuid
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA_DIR / "aperture_memory.db"
+_RETRIEVAL_CANDIDATE_LIMIT = 96
+_RETRIEVAL_CANDIDATE_BYTES = 20_000
+_RETRIEVAL_OLDER_PER_OWNER = 2
 
 VALID_CATEGORIES = {
     "profile",
@@ -48,6 +51,17 @@ def _normalize(text: str) -> str:
 
 def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"\w+", _normalize(text), flags=re.UNICODE))
+
+
+def _retrieval_history(*subjects, older_per_owner=_RETRIEVAL_OLDER_PER_OWNER):
+    if older_per_owner:
+        # Owners that can fill the whole pool also get a few of their oldest active records.
+        oldest = (reversed(records[-older_per_owner:]) if len(records) > _RETRIEVAL_CANDIDATE_LIMIT else ()
+                  for records in subjects)
+        for group in zip_longest(*oldest):
+            yield from (record for record in group if record is not None)
+    for group in zip_longest(*subjects):
+        yield from (record for record in group if record is not None)
 
 
 def _normalize_evidence_event_ids(
@@ -1628,8 +1642,7 @@ class MemoryStore:
         history_by_subject = {}
         for record in sorted(records, key=lambda item: item['updated_at'], reverse=True):
             history_by_subject.setdefault(record['subject'], []).append(record)
-        history = [record for group in zip_longest(*history_by_subject.values())
-                   for record in group if record is not None]
+        history = list(_retrieval_history(*history_by_subject.values()))
         pool, seen, size = [], set(), 0
         for record in current + contextual + history:
             if record['id'] in seen:
@@ -1639,7 +1652,7 @@ class MemoryStore:
             excerpt['content'] = record['content'][:500]
             excerpt['content_truncated'] = len(record['content']) > 500
             amount = len(json.dumps(excerpt, ensure_ascii=False).encode('utf-8'))
-            if len(pool) >= 96 or size + amount > 20000:
+            if len(pool) >= _RETRIEVAL_CANDIDATE_LIMIT or size + amount > _RETRIEVAL_CANDIDATE_BYTES:
                 continue
             size += amount
             pool.append(excerpt)
