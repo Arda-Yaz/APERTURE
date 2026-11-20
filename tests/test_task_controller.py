@@ -86,8 +86,11 @@ class AssessmentTests(unittest.TestCase):
         self.evidence.add(*pair(index=1, content=json.dumps({'status': 'ok', 'root': str(ROOT), 'path': 'nested/a.py',
                                                            'content': 'synthetic content'})))
         goal = 'Read `nested\\a.py`.'
-        self.assertEqual(controller.parse_assessment(verdict(), self.evidence, objective=goal).status, 'invalid')
-        matching = controller.parse_assessment(verdict(evidence_refs=['result1']), self.evidence, objective=goal)
+        requirements = {'nested\\a.py': 'read'}
+        self.assertEqual(controller.parse_assessment(verdict(file_requirements=requirements),
+                                                     self.evidence, objective=goal).status, 'invalid')
+        matching = controller.parse_assessment(verdict(evidence_refs=['result1'], file_requirements=requirements),
+                                               self.evidence, objective=goal)
         self.assertEqual(matching.status, 'satisfied')
 
     def test_absolute_target_uses_recorded_inspection_root(self):
@@ -97,9 +100,59 @@ class AssessmentTests(unittest.TestCase):
                 'status': 'ok', 'root': str(ROOT / directory), 'path': 'spec.txt', 'content': 'synthetic content',
             })))
         goal = f'Read `{ROOT / "wanted" / "spec.txt"}`.'
-        self.assertEqual(controller.parse_assessment(verdict(), self.evidence, objective=goal).status, 'invalid')
-        matching = controller.parse_assessment(verdict(evidence_refs=['result1']), self.evidence, objective=goal)
+        requirements = {str(ROOT / 'wanted' / 'spec.txt'): 'read'}
+        self.assertEqual(controller.parse_assessment(verdict(file_requirements=requirements),
+                                                     self.evidence, objective=goal).status, 'invalid')
+        matching = controller.parse_assessment(verdict(evidence_refs=['result1'], file_requirements=requirements),
+                                               self.evidence, objective=goal)
         self.assertEqual(matching.status, 'satisfied')
+
+    def test_write_requires_successful_write_evidence_for_the_file(self):
+        self.evidence.add(*pair(tool='update_text', status='error', index=1))
+        self.evidence.add(*pair(tool='update_text', index=2, content=json.dumps({
+            'status': 'verified', 'effects': 'published', 'path': 'a.py',
+            'verification': {'exact_bytes': True, 'readback': True},
+        })))
+        for index, expected in enumerate(('invalid', 'invalid', 'satisfied')):
+            with self.subTest(index=index):
+                assessment = controller.parse_assessment(
+                    verdict(evidence_refs=[f'result{index}'], file_requirements={'a.py': 'write'}),
+                    self.evidence, objective='Update a.py.',
+                )
+                self.assertEqual(assessment.status, expected)
+        for refs, expected in ((['result2'], 'invalid'), (['result0', 'result2'], 'satisfied')):
+            with self.subTest(refs=refs):
+                assessment = controller.parse_assessment(
+                    verdict(evidence_refs=refs, file_requirements={'a.py': 'read_write'}),
+                    self.evidence, objective='Read and update a.py.',
+                )
+                self.assertEqual(assessment.status, expected)
+
+    def test_file_requirements_must_classify_every_supplied_literal(self):
+        for requirements in ({}, {'a.py': 'read'}, {'a.py': 'read', 'b.py': 'invented'},
+                             {'a.py': 'read', 'b.py': 'context', 'extra.py': 'context'}):
+            with self.subTest(requirements=requirements):
+                assessment = controller.parse_assessment(verdict(file_requirements=requirements), self.evidence,
+                                                         objective='Read a.py. Example filename is b.py.')
+                self.assertEqual(assessment.status, 'invalid')
+        incomplete = verdict(status='incomplete', missing_requirements=['Read b.py.'],
+                             file_requirements={'a.py': 'read', 'b.py': 'read'})
+        assessment = controller.parse_assessment(incomplete, self.evidence, objective='Read a.py and b.py.')
+        self.assertEqual(assessment.status, 'incomplete')
+
+    def test_labels_do_not_let_an_unrelated_file_support_an_indirect_objective(self):
+        for role in ('context', 'indirect'):
+            with self.subTest(role=role):
+                assessment = controller.parse_assessment(verdict(file_requirements={'other.py': role}),
+                                                         self.evidence, objective='Read other.py.')
+                self.assertEqual(assessment.status, 'invalid')
+
+    def test_terminal_reference_does_not_replace_missing_structured_file_evidence(self):
+        self.evidence.add(*pair(tool='run_terminal', index=1, content='Exit code: 0\nOther output.'))
+        assessment = controller.parse_assessment(verdict(evidence_refs=['result0', 'result1'],
+                                                         file_requirements={'a.py': 'read', 'b.py': 'read'}),
+                                                 self.evidence, objective='Read a.py and b.py.')
+        self.assertEqual(assessment.status, 'invalid')
 
     def test_partial_positive_truncation_metadata_and_model_boundary(self):
         with patch.object(controller, 'ollama_chat', return_value=SimpleNamespace(message=SimpleNamespace(content=verdict()))) as model:

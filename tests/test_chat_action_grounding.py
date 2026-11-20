@@ -27,11 +27,14 @@ def reply(content='', calls=()):
     ]))
 
 
-def verdict(status, refs=()):
-    return reply(json.dumps({
+def verdict(status, refs=(), *, file_requirements=None):
+    value = {
         'status': status, 'rationale': 'Synthetic assessment.',
         'evidence_refs': list(refs), 'missing_requirements': [],
-    }))
+    }
+    if file_requirements is not None:
+        value['file_requirements'] = file_requirements
+    return reply(json.dumps(value))
 
 
 class ChatActionGroundingTests(unittest.TestCase):
@@ -77,7 +80,9 @@ class ChatActionGroundingTests(unittest.TestCase):
     def satisfy_with_recorded_ref(*, messages, **kwargs):
         payload = json.loads(messages[-1]['content'])
         entry, = payload['evidence']['entries']
-        return verdict('satisfied', [entry['evidence']['result_event_id']])
+        return verdict('satisfied', [entry['evidence']['result_event_id']], file_requirements={
+            path: 'read' for path in payload.get('file_targets', [])
+        } or None)
 
     def test_current_success_uses_positive_observed_result(self):
         answer, outcome, judge = self.run_read(self.satisfy_with_recorded_ref)
@@ -90,8 +95,10 @@ class ChatActionGroundingTests(unittest.TestCase):
         judge.assert_called_once()
 
     def test_conversation_label_cannot_hide_unobserved_file_completion(self):
-        for target, assessment in [('fixture.txt', reply('action_outcome')),
-                                   ('docs/README', reply('action_outcome')),
+        for target, assessment in [('fixture.txt', reply('{"classification":"action_outcome"}')),
+                                   ('docs/README', reply('{"classification":"action_outcome"}')),
+                                   ('fixture.txt', reply('{"classification":"conversation","classification":"action_outcome"}')),
+                                   ('fixture.txt', reply('conversation')),
                                    ('fixture.txt', InferenceError('timeout', role='task_controller'))]:
             with self.subTest(target=target, assessment=assessment):
                 answers, _, judge = self.run_cli(
@@ -105,7 +112,7 @@ class ChatActionGroundingTests(unittest.TestCase):
         answer = 'That is a plain text filename.'
         answers, _, judge = self.run_cli(
             ['What kind of name is fixture.txt?'], [reply(f'{llm.CONVERSATION_PREFIX} {answer}')],
-            [reply('conversation')],
+            [reply('{"classification":"conversation"}')],
         )
         self.assertEqual(answers, [answer])
         self.read.assert_not_called()
@@ -124,6 +131,30 @@ class ChatActionGroundingTests(unittest.TestCase):
                 self.assertIn('could not verify completion', answer)
                 self.assertIn(f'read_file "{wrong_path}": tool reported success', answer)
                 self.assertIn(observation['id'], answer)
+                judge.assert_called_once()
+
+    def test_multiple_file_reads_require_evidence_for_each_requested_file(self):
+        for goal, calls, file_requirements, claim, satisfied in (
+            ('Read a.txt and b.txt', ['a.txt'], {'a.txt': 'read', 'b.txt': 'read'}, 'I read both files.', False),
+            ('Read a.txt and b.txt', ['a.txt', 'b.txt'], {'a.txt': 'read', 'b.txt': 'read'}, 'I read both files.', True),
+            ('Read a.txt. For reference, b.txt is the name used in the example.', ['a.txt'],
+             {'a.txt': 'read', 'b.txt': 'context'}, 'I read a.txt.', True),
+        ):
+            with self.subTest(goal=goal, calls=calls):
+                def assess(*, messages, **kwargs):
+                    payload = json.loads(messages[-1]['content'])
+                    self.assertCountEqual(payload['file_targets'], file_requirements)
+                    refs = [entry['evidence']['result_event_id'] for entry in payload['evidence']['entries']]
+                    properties = kwargs['format']['properties']
+                    self.assertCountEqual(properties['file_requirements']['required'], file_requirements)
+                    self.assertCountEqual(properties['evidence_refs']['items']['enum'], refs)
+                    return verdict('satisfied', refs, file_requirements=file_requirements)
+
+                answers, _, judge = self.run_cli([goal], [
+                    reply(calls=[('read_file', {'path': path}) for path in calls]), reply(claim),
+                ], assess)
+                self.assertEqual(claim in answers[0], satisfied)
+                self.assertEqual('could not verify completion' in answers[0], not satisfied)
                 judge.assert_called_once()
 
     def test_permission_denial_cannot_support_success(self):
